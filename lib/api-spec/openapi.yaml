@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: chainlens
+    description: Blockscout-backed wallet investigation
 paths:
   /healthz:
     get:
@@ -24,6 +26,68 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /blockscout/status:
+    get:
+      operationId: getBlockscoutStatus
+      tags: [chainlens]
+      summary: Check Blockscout API configuration
+      responses:
+        "200":
+          description: API configuration status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlockscoutStatus"
+  /wallets/{address}/overview:
+    get:
+      operationId: getWalletOverview
+      tags: [chainlens]
+      summary: Get balances and recent transactions across supported chains
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^0x[a-fA-F0-9]{40}$"
+      responses:
+        "200":
+          description: Multichain wallet overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletOverview"
+        "400":
+          description: Invalid wallet address
+        "503":
+          description: Blockscout API key is not configured
+        "502":
+          description: Blockscout API request failed
+  /addresses/{address}/metadata:
+    get:
+      operationId: getAddressMetadata
+      tags: [chainlens]
+      summary: Get public identity metadata for an address
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^0x[a-fA-F0-9]{40}$"
+      responses:
+        "200":
+          description: Address metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AddressMetadata"
+        "400":
+          description: Invalid wallet address
+        "503":
+          description: Blockscout API key is not configured
+        "502":
+          description: Blockscout metadata request failed
 components:
   schemas:
     HealthStatus:
@@ -33,4 +97,116 @@ components:
           type: string
       required:
         - status
+    BlockscoutStatus:
+      type: object
+      properties:
+        configured:
+          type: boolean
+      required: [configured]
+    WalletOverview:
+      type: object
+      properties:
+        address:
+          type: string
+        chains:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChainWallet"
+      required: [address, chains]
+    ChainWallet:
+      type: object
+      properties:
+        chainId:
+          type: integer
+        chainName:
+          type: string
+        nativeSymbol:
+          type: string
+        nativeBalance:
+          type: string
+        nativePriceUsd:
+          type: ["number", "null"]
+        tokens:
+          type: array
+          items:
+            $ref: "#/components/schemas/TokenBalance"
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/WalletTransaction"
+      required:
+        - chainId
+        - chainName
+        - nativeSymbol
+        - nativeBalance
+        - nativePriceUsd
+        - tokens
+        - transactions
+    TokenBalance:
+      type: object
+      properties:
+        address:
+          type: string
+        name:
+          type: string
+        symbol:
+          type: string
+        decimals:
+          type: integer
+        balance:
+          type: string
+        priceUsd:
+          type: ["number", "null"]
+        valueUsd:
+          type: ["number", "null"]
+        iconUrl:
+          type: ["string", "null"]
+      required:
+        - address
+        - name
+        - symbol
+        - decimals
+        - balance
+        - priceUsd
+        - valueUsd
+        - iconUrl
+    WalletTransaction:
+      type: object
+      properties:
+        hash:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        from:
+          type: string
+        to:
+          type: ["string", "null"]
+        value:
+          type: string
+        method:
+          type: ["string", "null"]
+        status:
+          type: string
+      required: [hash, timestamp, from, to, value, method, status]
+    AddressMetadata:
+      type: object
+      properties:
+        address:
+          type: string
+        name:
+          type: ["string", "null"]
+        ensName:
+          type: ["string", "null"]
+        website:
+          type: ["string", "null"]
+        tags:
+          type: array
+          items:
+            type: string
+        iconUrl:
+          type: ["string", "null"]
+        hasMetadata:
+          type: boolean
+      required: [address, name, ensName, website, tags, iconUrl, hasMetadata]
 
