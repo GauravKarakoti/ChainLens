@@ -1,0 +1,53 @@
+You are an expert full-stack developer. Build ChainLens, a multichain wallet investigation dashboard that uses the Blockscout PRO API as its core data source.
+
+Tech Stack: Next.js (App Router) + TypeScript, Tailwind CSS, shadcn/ui, and Recharts for charts.
+
+Core Requirements:
+
+API Service (lib/blockscout.ts):
+
+Create a service to interact with the Blockscout PRO API.
+
+Base URL: https://api.blockscout.com/v2/api.
+
+Read the API key from process.env.BLOCKSCOUT_PRO_API_KEY.
+
+Implement functions:
+
+getNativeBalance(address, chainId): Uses the account/balance module.
+
+getTokenBalances(address, chainId): Uses the REST API {chain_id}/api/v2/addresses/{address}/token-balances.
+
+getTransactions(address, chainId): Uses the REST API {chain_id}/api/v2/addresses/{address}/transactions.
+
+getAddressMetadata(address): Uses the Metadata service at https://api.blockscout.com/metadata/api/v1/addresses/{address}.
+
+Dashboard UI (app/dashboard/page.tsx):
+
+Create a search bar for a wallet address.
+
+After a search, display data for the following chains: Ethereum (1), Base (8453), Optimism (10), and Arbitrum (42161).
+
+View 1 - Portfolio:
+
+Show a total net worth estimate.
+
+Use Recharts to create a Pie chart showing token allocation.
+
+List token balances grouped by chain in a shadcn Table.
+
+View 2 - Risk Report:
+
+Address Poisoning: Fetch recent transactions (getTransactions). Implement a simple check: if a transaction has a value of 0 and the to or from address shares a long matching prefix/suffix (first 5 and last 5 characters) with any other address in the wallet's history, flag it.
+
+Approval Risk: (For MVP, simply list any token approvals found in the transaction logs and mark them as "Review Needed").
+
+View 3 - Address Intel:
+
+When a user clicks on any address in the UI, show a shadcn Dialog with the metadata from getAddressMetadata (e.g., "Binance Hot Wallet", "Uniswap V3: Router").
+
+If BLOCKSCOUT_PRO_API_KEY is not set, display a null state saying the API Key is not set. Do not use mock data anywhere
+
+README:
+
+Include a clear explanation of how the Blockscout PRO API powers each core feature.
