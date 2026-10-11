@@ -5,7 +5,8 @@ import type {
   WalletTransaction,
 } from "@workspace/api-zod";
 
-const API_BASE = "https://api.blockscout.com/v2/api";
+const PRO_API_BASE = "https://api.blockscout.com/v2/api";
+const PRO_REST_BASE = "https://api.blockscout.com";
 const METADATA_BASE = "https://api.blockscout.com/metadata/api/v1";
 
 const CHAINS = [
@@ -87,7 +88,7 @@ export async function getNativeBalance(
   chainId: number,
 ): Promise<string> {
   const apiKey = requireApiKey();
-  const url = new URL(API_BASE);
+  const url = new URL(PRO_API_BASE);
   url.searchParams.set("chain_id", String(chainId));
   url.searchParams.set("module", "account");
   url.searchParams.set("action", "balance");
@@ -98,14 +99,14 @@ export async function getNativeBalance(
     throw new Error("Blockscout returned an unexpected native balance response");
   }
   if (data.status === "0" && result !== "0") {
-    throw new Error(stringOf(data.message, "Blockscout rejected the balance request"));
+    throw new Error("Blockscout rejected the native balance request");
   }
   return formatUnits(result, 18);
 }
 
 function chainRestUrl(chainId: number, endpoint: string, apiKey: string): URL {
   return urlWithKey(
-    new URL(`${API_BASE}/${chainId}/api/v2/${endpoint}`),
+    new URL(`${PRO_REST_BASE}/${chainId}/api/v2/${endpoint}`),
     apiKey,
   );
 }
