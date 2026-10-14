@@ -18,6 +18,25 @@ const CHAINS = [
 
 type JsonObject = Record<string, unknown>;
 
+let upstreamQueue: Promise<void> = Promise.resolve();
+let nextRequestAt = 0;
+
+function scheduleUpstreamRequest<T>(request: () => Promise<T>): Promise<T> {
+  const result = upstreamQueue.then(async () => {
+    const waitMs = Math.max(0, nextRequestAt - Date.now());
+    if (waitMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    }
+    nextRequestAt = Date.now() + 250;
+    return request();
+  });
+  upstreamQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 function objectOf(value: unknown): JsonObject {
   return value !== null && typeof value === "object"
     ? (value as JsonObject)
@@ -62,7 +81,9 @@ function urlWithKey(url: URL, apiKey: string): URL {
 }
 
 async function readJson(url: URL, description: string): Promise<unknown> {
-  const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  const response = await scheduleUpstreamRequest(() =>
+    fetch(url, { signal: AbortSignal.timeout(15_000) }),
+  );
   if (!response.ok) {
     throw new Error(`${description} returned HTTP ${response.status}`);
   }
