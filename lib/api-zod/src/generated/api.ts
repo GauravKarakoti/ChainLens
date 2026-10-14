@@ -41,7 +41,7 @@ export const GetWalletOverviewResponse = zod.object({
   "chainId": zod.number().int(),
   "chainName": zod.string(),
   "nativeSymbol": zod.string(),
-  "nativeBalance": zod.string(),
+  "nativeBalance": zod.string().nullable(),
   "nativePriceUsd": zod.number().nullable(),
   "tokens": zod.array(zod.object({
   "address": zod.string(),

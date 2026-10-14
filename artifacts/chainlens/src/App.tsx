@@ -108,7 +108,7 @@ function Dashboard() {
   const overview = walletQuery.data;
   const chains = overview?.chains ?? [];
   const holdings = useMemo(() => {
-    const assets: { key: string; address: string; name: string; symbol: string; amount: string; value: number | null; iconUrl: string | null; chain: string; native: boolean }[] = [];
+    const assets: { key: string; address: string; name: string; symbol: string; amount: string | null; value: number | null; iconUrl: string | null; chain: string; native: boolean }[] = [];
     for (const chain of chains) {
       const nativeAmount = numericValue(chain.nativeBalance);
       const nativePrice = chain.nativePriceUsd;
@@ -118,7 +118,7 @@ function Dashboard() {
         name: chain.chainName,
         symbol: chain.nativeSymbol,
         amount: chain.nativeBalance,
-        value: nativePrice === null ? null : nativeAmount * nativePrice,
+        value: chain.nativeBalance === null || nativePrice === null ? null : nativeAmount * nativePrice,
         iconUrl: null,
         chain: chain.chainName,
         native: true,
@@ -160,7 +160,7 @@ function Dashboard() {
     /approval event detected|approve|setApprovalForAll/i.test(tx.method ?? ''),
   );
   const hasPartialChains =
-    chains.some((chain) => chain.nativePriceUsd === null || chain.tokenBalancesIncomplete) ||
+    chains.some((chain) => chain.nativeBalance === null || chain.nativePriceUsd === null || chain.tokenBalancesIncomplete) ||
     holdings.some((asset) => asset.value === null);
   const holdingsByChain = chains.map((chain) => ({
     chain,
@@ -330,7 +330,7 @@ function Dashboard() {
                       <div className="side-stat-label">NETWORK COVERAGE</div>
                       <div className="chain-badges">{chains.map((chain) => <span className="chain-pill" key={chain.chainId} data-testid={`badge-chain-${chain.chainId}`}><span className="chain-mark">{chain.nativeSymbol.slice(0, 1)}</span>{chain.chainName}</span>)}</div>
                       <div className="coverage-note"><Activity size={14} /><span>{transactions.length} recent transactions returned</span></div>
-                       {hasPartialChains && <div className="partial-note" data-testid="notice-partial-chain"><AlertCircle size={13} /> Some token rows or prices are unavailable; estimates may be incomplete.</div>}
+                       {hasPartialChains && <div className="partial-note" data-testid="notice-partial-chain"><AlertCircle size={13} /> Some native balances, token rows, or prices are unavailable; estimates may be incomplete.</div>}
                     </div>
                   </section>
 
@@ -379,7 +379,7 @@ function Dashboard() {
                                             <div className="asset-name"><strong>{asset.name}</strong><button className="address-button asset-address" onClick={() => setIdentityAddress(asset.address)} data-testid={`button-token-address-${asset.key}`}>{compactAddress(asset.address)}</button></div>
                                           </div>
                                         </TableCell>
-                                        <TableCell className="asset-amount mono">{quantity(asset.amount)} <span>{asset.symbol}</span></TableCell>
+                                        <TableCell className="asset-amount mono">{asset.amount === null ? '—' : quantity(asset.amount)} <span>{asset.symbol}</span></TableCell>
                                         <TableCell className="asset-value mono" data-testid={`text-value-${asset.key}`}>{asset.value === null ? '—' : currency(asset.value)}</TableCell>
                                       </TableRow>
                                     ))}

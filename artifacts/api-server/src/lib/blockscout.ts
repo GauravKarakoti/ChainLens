@@ -5,7 +5,6 @@ import type {
   WalletTransaction,
 } from "@workspace/api-zod";
 
-const PRO_API_BASE = "https://api.blockscout.com/v2/api";
 const PRO_REST_BASE = "https://api.blockscout.com";
 const METADATA_BASE = "https://api.blockscout.com/services/metadata/api/v1";
 
@@ -125,20 +124,22 @@ export function isBlockscoutConfigured(): boolean {
 export async function getNativeBalance(
   address: string,
   chainId: number,
-): Promise<string> {
+): Promise<string | null> {
   const apiKey = requireApiKey();
-  const url = new URL(PRO_API_BASE);
-  url.searchParams.set("chain_id", String(chainId));
-  url.searchParams.set("module", "account");
-  url.searchParams.set("action", "balance");
-  url.searchParams.set("address", address);
-  const data = objectOf(await readJson(urlWithKey(url, apiKey), "Native balance request"));
-  const result = data.result;
+  const data = objectOf(
+    await readJson(
+      chainRestUrl(
+        chainId,
+        `addresses/${encodeURIComponent(address)}`,
+        apiKey,
+      ),
+      "Native balance request",
+    ),
+  );
+  const result = data.coin_balance;
+  if (result === null || result === undefined) return null;
   if (typeof result !== "string" && typeof result !== "number") {
     throw new Error("Blockscout returned an unexpected native balance response");
-  }
-  if (data.status === "0" && result !== "0") {
-    throw new Error("Blockscout rejected the native balance request");
   }
   return formatUnits(result, 18);
 }
@@ -325,13 +326,24 @@ async function getNativeTokenPrice(chainId: number): Promise<number | null> {
   return numberOf(data.coin_price);
 }
 
+function nativeRequestStatus(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  return error.message.match(/HTTP (\d{3})/)?.[1] ?? null;
+}
+
 async function getChainWallet(
   address: string,
   chain: (typeof CHAINS)[number],
 ): Promise<ChainWallet> {
   const [nativeBalance, tokenResult, transactions, nativePriceUsd] =
     await Promise.all([
-      getNativeBalance(address, chain.chainId),
+      getNativeBalance(address, chain.chainId).catch((error) => {
+        console.warn("Blockscout native balance unavailable", {
+          chainId: chain.chainId,
+          httpStatus: nativeRequestStatus(error),
+        });
+        return null;
+      }),
       getTokenBalances(address, chain.chainId),
       getTransactions(address, chain.chainId),
       getNativeTokenPrice(chain.chainId).catch(() => null),

@@ -22,7 +22,7 @@ The web app calls the shared API server; the server makes authenticated requests
 | ChainLens feature | ChainLens API | Blockscout source |
 | --- | --- | --- |
 | Connection status and missing-key state | `GET /api/blockscout/status` | Checks whether the server has `BLOCKSCOUT_PRO_API_KEY`; it does not disclose the key. |
-| Native balances | `GET /api/wallets/{address}/overview` | `GET https://api.blockscout.com/v2/api?chain_id={chainId}&module=account&action=balance&address={address}`. |
+| Native balances | `GET /api/wallets/{address}/overview` | `GET https://api.blockscout.com/{chainId}/api/v2/addresses/{address}`; the normalized balance comes from Blockscout's `coin_balance` field. |
 | Token balances and token USD estimates | `GET /api/wallets/{address}/overview` | `GET https://api.blockscout.com/{chainId}/api/v2/addresses/{address}/token-balances`; USD estimates use returned token exchange rates. |
 | Native-asset USD estimates | `GET /api/wallets/{address}/overview` | `GET https://api.blockscout.com/{chainId}/api/v2/stats` supplies the native coin price when available. |
 | Recent activity | `GET /api/wallets/{address}/overview` | `GET https://api.blockscout.com/{chainId}/api/v2/addresses/{address}/transactions`. |

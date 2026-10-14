@@ -123,7 +123,7 @@ components:
         nativeSymbol:
           type: string
         nativeBalance:
-          type: string
+          type: ["string", "null"]
         nativePriceUsd:
           type: ["number", "null"]
         tokens:

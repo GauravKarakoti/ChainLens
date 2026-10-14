@@ -43,7 +43,8 @@ export interface ChainWallet {
   chainId: number;
   chainName: string;
   nativeSymbol: string;
-  nativeBalance: string;
+  /** @nullable */
+  nativeBalance: string | null;
   /** @nullable */
   nativePriceUsd: number | null;
   tokens: TokenBalance[];
