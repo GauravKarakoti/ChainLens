@@ -22,12 +22,14 @@ The web app calls the shared API server; the server makes authenticated requests
 | ChainLens feature | ChainLens API | Blockscout source |
 | --- | --- | --- |
 | Connection status and missing-key state | `GET /api/blockscout/status` | Checks whether the server has `BLOCKSCOUT_PRO_API_KEY`; it does not disclose the key. |
-| Native balances | `GET /api/wallets/{address}/overview` | PRO-compatible account balance request with the chain ID. |
-| Token balances and token USD estimates | `GET /api/wallets/{address}/overview` | V2 address token balances; USD estimates use the token exchange rates returned by Blockscout. |
-| Native-asset USD estimates | `GET /api/wallets/{address}/overview` | V2 chain statistics provide the native coin price. |
-| Recent activity | `GET /api/wallets/{address}/overview` | V2 address transaction history on each supported network. |
-| Approval review signals | `GET /api/wallets/{address}/overview` | For approval-like transactions, V2 transaction logs are checked for a decoded `Approval(...)` event. |
-| Address name, ENS name, website, tags, and icon | `GET /api/addresses/{address}/metadata` | Blockscout metadata API. |
+| Native balances | `GET /api/wallets/{address}/overview` | `GET https://api.blockscout.com/v2/api?chain_id={chainId}&module=account&action=balance&address={address}`. |
+| Token balances and token USD estimates | `GET /api/wallets/{address}/overview` | `GET https://api.blockscout.com/{chainId}/api/v2/addresses/{address}/token-balances`; USD estimates use returned token exchange rates. |
+| Native-asset USD estimates | `GET /api/wallets/{address}/overview` | `GET https://api.blockscout.com/{chainId}/api/v2/stats` supplies the native coin price when available. |
+| Recent activity | `GET /api/wallets/{address}/overview` | `GET https://api.blockscout.com/{chainId}/api/v2/addresses/{address}/transactions`. |
+| Approval review signals | `GET /api/wallets/{address}/overview` | For approval-like transactions, `GET https://api.blockscout.com/{chainId}/api/v2/transactions/{hash}/logs` is checked for a decoded `Approval(...)` event. |
+| Address name, ENS name, website, tags, and icon | `GET /api/addresses/{address}/metadata` | `GET https://api.blockscout.com/services/metadata/api/v1/metadata?addresses={address}`. |
+
+Blockscout PRO authentication is added by the server to each request using the `apikey` query parameter. The browser only calls the shared API server.
 
 The portfolio total and Recharts pie chart use only values for which Blockscout returned a price. Missing prices are not invented. Transaction history and risk signals are limited to the history Blockscout returns for each request; the dashboard does not claim to scan a wallet's complete lifetime history.
 
