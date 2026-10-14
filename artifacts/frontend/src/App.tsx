@@ -10,6 +10,7 @@ import {
   useGetAddressMetadata,
   useGetBlockscoutStatus,
   useGetWalletOverview,
+  setBaseUrl
 } from '@workspace/api-client-react';
 import {
   Cell,
@@ -54,6 +55,7 @@ import {
 } from 'lucide-react';
 import { Link, Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
+setBaseUrl(import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000');
 const queryClient = new QueryClient();
 
 const validAddress = (address: string) => /^0x[a-fA-F0-9]{40}$/.test(address.trim());
@@ -198,9 +200,9 @@ function Dashboard() {
   return (
     <div className="app-shell min-h-[100dvh]">
       <aside className="sidebar">
-        <Link href="/dashboard" className="brand-lockup" data-testid="link-brand-dashboard">
-          <span className="brand-mark"><span /></span>
-          <span className="brand-word">chain<span>lens</span></span>
+        <Link href="/" className="brand-lockup" data-testid="link-brand-dashboard">
+          <img src="/logo.png" alt="" className="brand-mark" />
+          <span className="brand-word">Chain<span>Lens</span></span>
         </Link>
         <div className="side-rule" />
         <div className="side-caption">WORKSPACE</div>
@@ -232,7 +234,7 @@ function Dashboard() {
       <main className="main-area shell-grid">
         <header className="topbar">
           <div className="crumb"><span>RESEARCH</span><span className="crumb-slash">/</span><b>Wallet overview</b></div>
-          <div className="topbar-right"><span className="secure-label"><span className="live-dot" /> READ-ONLY SESSION</span><span className="avatar-monogram">CL</span></div>
+          <div className="topbar-right"><span className="secure-label"><span className="live-dot" /> READ-ONLY SESSION</span></div>
         </header>
         <div className="page-content">
           <div className="page-heading reveal">

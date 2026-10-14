@@ -4,13 +4,13 @@ import type {
   TokenBalance,
   WalletTransaction,
 } from "@workspace/api-zod";
+import "dotenv/config";
 
 const PRO_REST_BASE = "https://api.blockscout.com";
 const METADATA_BASE = "https://api.blockscout.com/services/metadata/api/v1";
 
 const CHAINS = [
   { chainId: 1, chainName: "Ethereum", nativeSymbol: "ETH" },
-  { chainId: 8453, chainName: "Base", nativeSymbol: "ETH" },
   { chainId: 10, chainName: "Optimism", nativeSymbol: "ETH" },
   { chainId: 42161, chainName: "Arbitrum", nativeSymbol: "ETH" },
 ] as const;
@@ -331,6 +331,10 @@ function nativeRequestStatus(error: unknown): string | null {
   return error.message.match(/HTTP (\d{3})/)?.[1] ?? null;
 }
 
+function isHttp402Error(error: unknown): boolean {
+  return error instanceof Error && /returned HTTP 402\b/.test(error.message);
+}
+
 async function getChainWallet(
   address: string,
   chain: (typeof CHAINS)[number],
@@ -344,10 +348,27 @@ async function getChainWallet(
         });
         return null;
       }),
-      getTokenBalances(address, chain.chainId),
-      getTransactions(address, chain.chainId),
+      getTokenBalances(address, chain.chainId).catch((error) => {
+        if (isHttp402Error(error)) {
+          console.warn("Blockscout token balances restricted on current tier", {
+            chainId: chain.chainId,
+          });
+          return { tokens: [], incomplete: true };
+        }
+        throw error;
+      }),
+      getTransactions(address, chain.chainId).catch((error) => {
+        if (isHttp402Error(error)) {
+          console.warn("Blockscout transactions restricted on current tier", {
+            chainId: chain.chainId,
+          });
+          return [];
+        }
+        throw error;
+      }),
       getNativeTokenPrice(chain.chainId).catch(() => null),
     ]);
+
   return {
     ...chain,
     nativeBalance,
