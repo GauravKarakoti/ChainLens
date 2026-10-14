@@ -29,9 +29,9 @@ The web app calls the shared API server; the server makes authenticated requests
 | Approval review signals | `GET /api/wallets/{address}/overview` | For approval-like transactions, `GET https://api.blockscout.com/{chainId}/api/v2/transactions/{hash}/logs` is checked for a decoded `Approval(...)` event. |
 | Address name, ENS name, website, tags, and icon | `GET /api/addresses/{address}/metadata` | `GET https://api.blockscout.com/services/metadata/api/v1/metadata?addresses={address}`. |
 
-Blockscout PRO authentication is added by the server to each request using the `apikey` query parameter. The browser only calls the shared API server.
+Blockscout PRO authentication is added by the server to each request using the `apikey` query parameter and Bearer authorization header. The browser only calls the shared API server.
 
-The portfolio total and Recharts pie chart use only values for which Blockscout returned a price. Missing prices are not invented. Transaction history and risk signals are limited to the history Blockscout returns for each request; the dashboard does not claim to scan a wallet's complete lifetime history.
+The portfolio total and Recharts pie chart use only values for which Blockscout returned a price. Missing prices are not invented. The fungible token table includes ERC-20 balances; NFT rows are not treated as fungible assets, and rows without the decimals or balance needed to normalize them are omitted with a partial-data notice. Transaction history and risk signals are limited to the history Blockscout returns for each request; the dashboard does not claim to scan a wallet's complete lifetime history.
 
 ## Risk signals
 

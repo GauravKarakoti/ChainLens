@@ -53,6 +53,7 @@ export const GetWalletOverviewResponse = zod.object({
   "valueUsd": zod.number().nullable(),
   "iconUrl": zod.string().nullable()
 })),
+  "tokenBalancesIncomplete": zod.boolean(),
   "transactions": zod.array(zod.object({
   "hash": zod.string(),
   "timestamp": zod.coerce.date(),

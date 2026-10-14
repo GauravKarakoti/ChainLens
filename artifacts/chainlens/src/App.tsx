@@ -159,7 +159,9 @@ function Dashboard() {
   const approvalTransactions = transactions.filter((tx) =>
     /approval event detected|approve|setApprovalForAll/i.test(tx.method ?? ''),
   );
-  const hasPartialChains = chains.some((chain) => !chain.transactions?.length || chain.nativePriceUsd === null);
+  const hasPartialChains =
+    chains.some((chain) => chain.nativePriceUsd === null || chain.tokenBalancesIncomplete) ||
+    holdings.some((asset) => asset.value === null);
   const holdingsByChain = chains.map((chain) => ({
     chain,
     assets: holdings.filter((asset) => asset.chain === chain.chainName),
@@ -328,7 +330,7 @@ function Dashboard() {
                       <div className="side-stat-label">NETWORK COVERAGE</div>
                       <div className="chain-badges">{chains.map((chain) => <span className="chain-pill" key={chain.chainId} data-testid={`badge-chain-${chain.chainId}`}><span className="chain-mark">{chain.nativeSymbol.slice(0, 1)}</span>{chain.chainName}</span>)}</div>
                       <div className="coverage-note"><Activity size={14} /><span>{transactions.length} recent transactions returned</span></div>
-                      {hasPartialChains && <div className="partial-note" data-testid="notice-partial-chain"><AlertCircle size={13} /> Some chain fields are unavailable; values may be incomplete.</div>}
+                       {hasPartialChains && <div className="partial-note" data-testid="notice-partial-chain"><AlertCircle size={13} /> Some token rows or prices are unavailable; estimates may be incomplete.</div>}
                     </div>
                   </section>
 

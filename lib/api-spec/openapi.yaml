@@ -130,6 +130,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TokenBalance"
+        tokenBalancesIncomplete:
+          type: boolean
         transactions:
           type: array
           items:
@@ -141,6 +143,7 @@ components:
         - nativeBalance
         - nativePriceUsd
         - tokens
+        - tokenBalancesIncomplete
         - transactions
     TokenBalance:
       type: object

@@ -81,11 +81,29 @@ function urlWithKey(url: URL, apiKey: string): URL {
 }
 
 async function readJson(url: URL, description: string): Promise<unknown> {
+  const apiKey = url.searchParams.get("apikey");
   const response = await scheduleUpstreamRequest(() =>
-    fetch(url, { signal: AbortSignal.timeout(15_000) }),
+    fetch(url, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+      signal: AbortSignal.timeout(15_000),
+    }),
   );
   if (!response.ok) {
-    throw new Error(`${description} returned HTTP ${response.status}`);
+    const remainingCredits = response.headers.get("x-credits-remaining");
+    const creditCount =
+      remainingCredits && /^\d+$/.test(remainingCredits)
+        ? remainingCredits
+        : "unreported";
+    const paymentChallenge = response.headers.has("payment-required")
+      ? "present"
+      : "absent";
+    const paymentDetails =
+      response.status === 402
+        ? ` (credits remaining: ${creditCount}; payment challenge: ${paymentChallenge})`
+        : "";
+    throw new Error(
+      `${description} returned HTTP ${response.status}${paymentDetails}`,
+    );
   }
   return response.json() as Promise<unknown>;
 }
@@ -135,7 +153,7 @@ function chainRestUrl(chainId: number, endpoint: string, apiKey: string): URL {
 export async function getTokenBalances(
   address: string,
   chainId: number,
-): Promise<TokenBalance[]> {
+): Promise<{ tokens: TokenBalance[]; incomplete: boolean }> {
   const apiKey = requireApiKey();
   const data = await readJson(
     chainRestUrl(
@@ -149,22 +167,27 @@ export async function getTokenBalances(
     throw new Error("Blockscout returned an unexpected token balances response");
   }
   const items = data;
-  return items.map((entry): TokenBalance => {
+  let incomplete = false;
+  const tokens = items.flatMap((entry): TokenBalance[] => {
     const row = objectOf(entry);
     const token = objectOf(row.token);
+    const tokenType = stringOf(token.type).toUpperCase();
+    if (tokenType && tokenType !== "ERC-20") return [];
     const parsedDecimals = numberOf(token.decimals);
     if (parsedDecimals === null || parsedDecimals < 0) {
-      throw new Error("Blockscout returned a token without valid decimals");
+      incomplete = true;
+      return [];
     }
     const decimals = Math.trunc(parsedDecimals);
-    const rawBalance = row.token_balance ?? row.balance;
+    const rawBalance = row.value ?? row.token_balance ?? row.balance;
     if (rawBalance === undefined || rawBalance === null) {
-      throw new Error("Blockscout returned a token without a balance");
+      incomplete = true;
+      return [];
     }
     const balance = formatUnits(rawBalance, decimals);
     const priceUsd = numberOf(token.exchange_rate);
     const balanceNumber = Number(balance);
-    return {
+    return [{
       address: stringOf(token.address_hash ?? token.address),
       name: stringOf(token.name, "Unknown token"),
       symbol: stringOf(token.symbol, "—"),
@@ -179,8 +202,9 @@ export async function getTokenBalances(
         typeof token.icon_url === "string" && token.icon_url.length > 0
           ? token.icon_url
           : null,
-    };
+    }];
   });
+  return { tokens, incomplete };
 }
 
 function normalizeTransaction(entry: unknown): WalletTransaction | null {
@@ -305,7 +329,7 @@ async function getChainWallet(
   address: string,
   chain: (typeof CHAINS)[number],
 ): Promise<ChainWallet> {
-  const [nativeBalance, tokens, transactions, nativePriceUsd] =
+  const [nativeBalance, tokenResult, transactions, nativePriceUsd] =
     await Promise.all([
       getNativeBalance(address, chain.chainId),
       getTokenBalances(address, chain.chainId),
@@ -316,7 +340,8 @@ async function getChainWallet(
     ...chain,
     nativeBalance,
     nativePriceUsd,
-    tokens,
+    tokens: tokenResult.tokens,
+    tokenBalancesIncomplete: tokenResult.incomplete,
     transactions,
   };
 }

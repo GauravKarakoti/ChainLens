@@ -16,5 +16,6 @@ export interface ChainWallet {
   /** @nullable */
   nativePriceUsd: number | null;
   tokens: TokenBalance[];
+  tokenBalancesIncomplete: boolean;
   transactions: WalletTransaction[];
 }

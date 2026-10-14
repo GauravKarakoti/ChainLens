@@ -21,7 +21,7 @@ function isMissingApiKey(error: unknown): boolean {
 function safeErrorContext(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
   const requestFailure = message.match(
-    /^(Native balance request|Token balances request|Transaction history request|Chain stats request|Transaction logs request|Address metadata request) returned HTTP \d{3}$/,
+    /^(Native balance request|Token balances request|Transaction history request|Chain stats request|Transaction logs request|Address metadata request) returned HTTP \d{3}(?: \(credits remaining: (?:\d+|unreported); payment challenge: (?:present|absent)\))?$/,
   );
   if (requestFailure) return requestFailure[0];
 
