@@ -217,7 +217,7 @@ function Dashboard() {
                 <AlertCircle size={14} /> Connection status unavailable · retry
               </button>
             ) : blockscout.data?.configured ? (
-              <div className="source-message" data-testid="status-blockscout-configured">Blockscout connected</div>
+              <div className="source-message" data-testid="status-blockscout-configured">API key configured</div>
             ) : (
               <div className="source-message source-warning" data-testid="status-blockscout-unconfigured">API Key is not set</div>
             )}

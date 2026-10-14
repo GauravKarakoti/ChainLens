@@ -70,7 +70,9 @@ router.get("/wallets/:address/overview", async (req, res): Promise<void> => {
       },
       "Blockscout wallet lookup failed",
     );
-    res.status(502).json({ error: "Blockscout could not return wallet data." });
+    res.status(502).json({
+      error: `Blockscout request failed: ${safeErrorContext(error)}`,
+    });
   }
 });
 
@@ -98,7 +100,9 @@ router.get("/addresses/:address/metadata", async (req, res): Promise<void> => {
       },
       "Blockscout address metadata lookup failed",
     );
-    res.status(502).json({ error: "Blockscout could not return address metadata." });
+    res.status(502).json({
+      error: `Blockscout metadata request failed: ${safeErrorContext(error)}`,
+    });
   }
 });
 

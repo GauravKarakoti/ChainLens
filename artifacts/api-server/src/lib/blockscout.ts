@@ -7,7 +7,7 @@ import type {
 
 const PRO_API_BASE = "https://api.blockscout.com/v2/api";
 const PRO_REST_BASE = "https://api.blockscout.com";
-const METADATA_BASE = "https://api.blockscout.com/metadata/api/v1";
+const METADATA_BASE = "https://api.blockscout.com/services/metadata/api/v1";
 
 const CHAINS = [
   { chainId: 1, chainName: "Ethereum", nativeSymbol: "ETH" },
@@ -289,7 +289,7 @@ async function getChainWallet(
       getNativeBalance(address, chain.chainId),
       getTokenBalances(address, chain.chainId),
       getTransactions(address, chain.chainId),
-      getNativeTokenPrice(chain.chainId),
+      getNativeTokenPrice(chain.chainId).catch(() => null),
     ]);
   return {
     ...chain,
@@ -329,11 +329,22 @@ export async function getAddressMetadata(
   address: string,
 ): Promise<AddressMetadata> {
   const apiKey = requireApiKey();
-  const url = urlWithKey(
-    new URL(`${METADATA_BASE}/addresses/${encodeURIComponent(address)}`),
-    apiKey,
+  const url = urlWithKey(new URL(`${METADATA_BASE}/metadata`), apiKey);
+  url.searchParams.set("addresses", address);
+  const response = await readJson(url, "Address metadata request");
+  const result = objectOf(response);
+  const addressRecords = objectOf(result.addresses);
+  const raw = objectOf(
+    (Array.isArray(response)
+      ? response.find((entry) => {
+          const row = objectOf(entry);
+          return addressOf(row.address ?? row.hash).toLowerCase() === address.toLowerCase();
+        })
+      : addressRecords[address] ??
+        addressRecords[address.toLowerCase()] ??
+        result[address] ??
+        response),
   );
-  const raw = objectOf(await readJson(url, "Address metadata request"));
   const metadata = objectOf(raw.metadata);
   const tags = [
     ...collectStrings(raw.tags),
@@ -342,7 +353,13 @@ export async function getAddressMetadata(
     ...collectStrings(metadata.public_tags),
   ];
   const name = firstString(raw.name, raw.label, metadata.name, metadata.label);
-  const ensName = firstString(raw.ens_name, raw.ensName, metadata.ens_name);
+  const ensName = firstString(
+    raw.ens_name,
+    raw.ensName,
+    raw.ens_domain_name,
+    metadata.ens_name,
+    metadata.ens_domain_name,
+  );
   const website = firstString(raw.website, metadata.website, raw.url);
   const iconUrl = firstString(
     raw.icon_url,
