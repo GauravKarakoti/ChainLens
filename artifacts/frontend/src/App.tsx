@@ -61,6 +61,7 @@ import {
   ExternalLink,
   Fingerprint,
   Globe2,
+  KeyRound,
   Link2,
   LoaderCircle,
   Search,
@@ -84,43 +85,10 @@ const queryClient = new QueryClient({
 
 const LOADING_TIMEOUT_MS = 15_000;
 
-const CHAIN_EXPLORERS: Record<string, string> = {
-  '1': 'https://eth.blockscout.com',
-  ethereum: 'https://eth.blockscout.com',
-  '10': 'https://optimism.blockscout.com',
-  optimism: 'https://optimism.blockscout.com',
-  '42161': 'https://arbitrum.blockscout.com',
-  arbitrum: 'https://arbitrum.blockscout.com',
-  '8453': 'https://base.blockscout.com',
-  base: 'https://base.blockscout.com',
-  '137': 'https://polygon.blockscout.com',
-  polygon: 'https://polygon.blockscout.com',
-  '100': 'https://gnosis.blockscout.com',
-  gnosis: 'https://gnosis.blockscout.com',
-  '324': 'https://zksync.blockscout.com',
-  'zksync era': 'https://zksync.blockscout.com',
-  '534352': 'https://scroll.blockscout.com',
-  scroll: 'https://scroll.blockscout.com',
-  '59144': 'https://linea.blockscout.com',
-  linea: 'https://linea.blockscout.com',
-  '42220': 'https://celo.blockscout.com',
-  celo: 'https://celo.blockscout.com',
-};
-
 const DEMO_WALLETS = [
   { label: 'vitalik.eth', address: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045' },
   { label: 'Multi-Chain DeFi', address: '0x47ac0Fb4F2D84898e4D9E7b4DaB3C24507a6D503' },
 ];
-
-function blockscoutUrl(
-  chainIdOrName: string | number,
-  kind: 'tx' | 'address' | 'token',
-  value: string,
-): string {
-  const key = String(chainIdOrName).toLowerCase();
-  const base = CHAIN_EXPLORERS[key] ?? 'https://eth.blockscout.com';
-  return `${base}/${kind}/${value}`;
-}
 
 const validAddress = (address: string) => /^0x[a-fA-F0-9]{40}$/.test(address.trim());
 const compactAddress = (address: string) => `${address.slice(0, 7)}…${address.slice(-5)}`;
@@ -136,21 +104,6 @@ const currency = (value: number) =>
   }).format(value);
 const quantity = (value: string | number, maximumFractionDigits = 5) =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits }).format(numericValue(value));
-const txIsZeroValue = (value: string) => {
-  if (/^0x0*$/i.test(value)) return true;
-  const n = Number(value);
-  return Number.isFinite(n) && n === 0;
-};
-const lookalikeAddress = (candidate: string, other: string) => {
-  const a = candidate.toLowerCase().replace(/^0x/, '');
-  const b = other.toLowerCase().replace(/^0x/, '');
-  if (a.length !== 40 || b.length !== 40 || a === b) return false;
-  let prefix = 0;
-  let suffix = 0;
-  while (prefix < a.length && a[prefix] === b[prefix]) prefix += 1;
-  while (suffix < a.length && a[a.length - suffix - 1] === b[b.length - suffix - 1]) suffix += 1;
-  return (prefix >= 4 && suffix >= 4 && prefix + suffix >= 8) || prefix >= 6 || suffix >= 6;
-};
 
 function Dashboard() {
   const [draft, setDraft] = useState('');
@@ -160,6 +113,7 @@ function Dashboard() {
   const [copied, setCopied] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [timedOut, setTimedOut] = useState(false);
+  const [activeTab, setActiveTab] = useState<'overview' | 'risks' | 'approvals' | 'linkability' | 'history'>('overview');
 
   const blockscout = useGetBlockscoutStatus({
     query: { queryKey: getGetBlockscoutStatusQueryKey(), retry: 1 },
@@ -204,13 +158,53 @@ function Dashboard() {
     return () => window.clearInterval(interval);
   }, [walletQuery.isFetching, submittedAddress]);
 
-  const overview = walletQuery.data as
-    | (NonNullable<typeof walletQuery.data> & {
-        totalLifetimeTransactions?: number;
-        totalLifetimeTokenTransfers?: number;
-      })
-    | undefined;
+  const overview = walletQuery.data;
   const chains = overview?.chains ?? [];
+  const approvals = overview?.approvals ?? [];
+  const poisoningMatches = overview?.poisoningMatches ?? [];
+  const linkability = overview?.linkability;
+  const history = overview?.history ?? [];
+
+  // Construct UI risk signals from poisoning matches & unlimited approvals
+  const riskSignals = useMemo(() => {
+    const list: Array<{
+      id: string;
+      severity: string;
+      title: string;
+      description: string;
+      chainName: string;
+      explorerTxUrl?: string;
+      explorerAddressUrl?: string;
+    }> = [];
+
+    for (const p of poisoningMatches) {
+      list.push({
+        id: `poison-${p.chainId}-${p.hash}`,
+        severity: p.isZeroValue ? 'critical' : 'high',
+        title: `Address Poisoning Lookalike (${p.prefixMatch} prefix / ${p.suffixMatch} suffix match)`,
+        description: `Address ${compactAddress(p.suspiciousAddress)} closely mimics known counterparty ${compactAddress(p.mimickedAddress)} on ${p.chainName}.`,
+        chainName: p.chainName,
+        explorerTxUrl: p.txExplorerUrl,
+        explorerAddressUrl: p.suspiciousExplorerUrl,
+      });
+    }
+
+    for (const a of approvals) {
+      if (a.allowanceType === 'unlimited') {
+        list.push({
+          id: `approval-${a.chainId}-${a.hash}`,
+          severity: 'high',
+          title: `Unlimited Token Approval on ${a.chainName}`,
+          description: `Spender ${compactAddress(a.spenderAddress)} has an active unlimited allowance (${a.formattedAllowance}) for token ${compactAddress(a.tokenAddress)}.`,
+          chainName: a.chainName,
+          explorerTxUrl: a.txExplorerUrl,
+          explorerAddressUrl: a.spenderExplorerUrl,
+        });
+      }
+    }
+
+    return list;
+  }, [poisoningMatches, approvals]);
 
   const holdings = useMemo(() => {
     const assets: {
@@ -222,8 +216,9 @@ function Dashboard() {
       value: number | null;
       iconUrl: string | null;
       chain: string;
-      chainId: number;
+      chainId: number | string;
       native: boolean;
+      explorerUrl?: string;
     }[] = [];
     for (const chain of chains) {
       const nativeAmount = numericValue(chain.nativeBalance);
@@ -242,8 +237,9 @@ function Dashboard() {
         chain: chain.chainName,
         chainId: chain.chainId,
         native: true,
+        explorerUrl: (chain as any).addressExplorerUrl,
       });
-      for (const token of chain.tokens ?? []) {
+      for (const token of (chain.tokens ?? []) as any[]) {
         assets.push({
           key: `${chain.chainId}-${token.address}`,
           address: token.address,
@@ -255,6 +251,7 @@ function Dashboard() {
           chain: chain.chainName,
           chainId: chain.chainId,
           native: false,
+          explorerUrl: token.explorerTokenUrl,
         });
       }
     }
@@ -269,11 +266,10 @@ function Dashboard() {
     () =>
       chains
         .flatMap((chain) =>
-          (chain.transactions ?? []).map((tx) => ({
+          ((chain.transactions ?? []) as any[]).map((tx) => ({
             ...tx,
             chain: chain.chainName,
             chainId: chain.chainId,
-            priceUsd: chain.nativePriceUsd ?? 0,
           })),
         )
         .sort(
@@ -283,155 +279,9 @@ function Dashboard() {
     [chains],
   );
 
-  const lifetimeTxCount = useMemo(() => {
-    if (typeof overview?.totalLifetimeTransactions === 'number' && overview.totalLifetimeTransactions > 0) {
-      return overview.totalLifetimeTransactions;
-    }
-    return chains.reduce((acc, c) => {
-      const extra = (c as { totalTransactionsCount?: number }).totalTransactionsCount;
-      return acc + (typeof extra === 'number' ? extra : c.transactions?.length ?? 0);
-    }, 0);
-  }, [overview, chains]);
-
-  const poisoningMatches = useMemo(() => {
-    const historicalAddresses = [
-      submittedAddress,
-      ...transactions.flatMap((other) => [other.from, other.to ?? '']),
-    ].filter(Boolean);
-
-    return transactions.flatMap((tx) => {
-      const candidates = [tx.from, tx.to ?? ''].filter(
-        (addr) => addr && addr.toLowerCase() !== submittedAddress.toLowerCase(),
-      );
-      for (const candidate of candidates) {
-        const mimicked = historicalAddresses.find(
-          (other) =>
-            other.toLowerCase() !== candidate.toLowerCase() &&
-            lookalikeAddress(candidate, other),
-        );
-        if (mimicked && (txIsZeroValue(tx.value) || candidate.toLowerCase() === tx.from.toLowerCase())) {
-          return [{ ...tx, suspiciousAddress: candidate, mimickedAddress: mimicked }];
-        }
-      }
-      return [];
-    });
-  }, [transactions, submittedAddress]);
-
-  const approvalTransactions = useMemo(
-    () =>
-      transactions
-        .filter((tx) =>
-          /approval event detected|approve|setApprovalForAll|increaseAllowance/i.test(
-            tx.method ?? '',
-          ),
-        )
-        .map((tx) => {
-          const spenderMatch = (tx.method ?? '').match(/Spender (0x[a-fA-F0-9]{40})/);
-          return {
-            ...tx,
-            spenderAddress: spenderMatch?.[1] ?? tx.to ?? tx.from,
-            tokenAddress: tx.to ?? tx.from,
-          };
-        }),
-    [transactions],
-  );
-
-  // Wallet Linkability Score (0-100) + Cross-Chain Shared Counterparties
-  const linkability = useMemo(() => {
-    const self = submittedAddress.toLowerCase();
-    const activeChains = chains.filter(
-      (c) =>
-        numericValue(c.nativeBalance) > 0 ||
-        (c.tokens?.length ?? 0) > 0 ||
-        (c.transactions?.length ?? 0) > 0,
-    );
-
-    const counterpartyMap = new Map<string, { chains: Set<string>; txCount: number }>();
-    const hourWindowMap = new Map<number, Set<string>>();
-
-    for (const tx of transactions) {
-      const from = tx.from.toLowerCase();
-      const to = (tx.to ?? '').toLowerCase();
-      const other = from === self ? to : from;
-      if (/^0x[a-f0-9]{40}$/.test(other) && other !== self) {
-        const current = counterpartyMap.get(other) ?? { chains: new Set<string>(), txCount: 0 };
-        current.chains.add(tx.chain);
-        current.txCount += 1;
-        counterpartyMap.set(other, current);
-      }
-      const d = new Date(tx.timestamp);
-      if (Number.isFinite(d.getTime())) {
-        const h = d.getUTCHours();
-        const set = hourWindowMap.get(h) ?? new Set<string>();
-        set.add(tx.chain);
-        hourWindowMap.set(h, set);
-      }
-    }
-
-    const sharedCounterparties = Array.from(counterpartyMap.entries())
-      .filter(([, info]) => info.chains.size >= 2)
-      .map(([address, info]) => ({
-        address,
-        chains: Array.from(info.chains),
-        txCount: info.txCount,
-      }))
-      .sort((a, b) => b.chains.length - a.chains.length || b.txCount - a.txCount);
-
-    const overlappingHours = Array.from(hourWindowMap.values()).filter((s) => s.size >= 2).length;
-    const score = Math.min(
-      100,
-      Math.min(40, activeChains.length * 5) +
-        Math.min(40, sharedCounterparties.length * 12) +
-        Math.min(20, overlappingHours * 4),
-    );
-    const level =
-      score >= 75 ? 'CRITICAL' : score >= 50 ? 'HIGH' : score >= 25 ? 'MODERATE' : 'LOW';
-
-    return {
-      score,
-      level,
-      activeChainCount: activeChains.length,
-      sharedCounterparties,
-      overlappingHours,
-    };
-  }, [chains, transactions, submittedAddress]);
-
-  // Historical Performance & Complete Activity Chart Series
-  const historicalSeries = useMemo(() => {
-    const byDate = new Map<
-      string,
-      { date: string; txCount: number; volumeUsd: number; chains: Set<string> }
-    >();
-    for (const tx of transactions) {
-      const d = new Date(tx.timestamp);
-      if (!Number.isFinite(d.getTime())) continue;
-      const date = d.toISOString().slice(0, 10);
-      const entry = byDate.get(date) ?? {
-        date,
-        txCount: 0,
-        volumeUsd: 0,
-        chains: new Set<string>(),
-      };
-      entry.txCount += 1;
-      entry.chains.add(tx.chain);
-      const rawAmount = numericValue(tx.value);
-      const normalizedEth = rawAmount > 1e9 ? rawAmount / 1e18 : rawAmount;
-      entry.volumeUsd += normalizedEth * (tx.priceUsd || 0);
-      byDate.set(date, entry);
-    }
-    const sorted = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
-    let cumulativeUsd = 0;
-    return sorted.map((item) => {
-      cumulativeUsd += item.volumeUsd;
-      return {
-        date: item.date,
-        txCount: item.txCount,
-        volumeUsd: Number(item.volumeUsd.toFixed(2)),
-        cumulativeUsd: Number(cumulativeUsd.toFixed(2)),
-        activeChains: item.chains.size,
-      };
-    });
-  }, [transactions]);
+  const lifetimeTxCount =
+    (overview as any)?.totalLifetimeTransactions ??
+    chains.reduce((acc, c) => acc + ((c as any).totalTransactionsCount ?? c.transactions?.length ?? 0), 0);
 
   const hasPartialChains =
     chains.some(
@@ -549,7 +399,7 @@ function Dashboard() {
           <div className="crumb">
             <span>RESEARCH</span>
             <span className="crumb-slash">/</span>
-            <b>Wallet overview (10+ Chains)</b>
+            <b>Wallet investigation (10+ Chains)</b>
           </div>
           <div className="topbar-right">
             <span className="secure-label">
@@ -561,13 +411,13 @@ function Dashboard() {
           <div className="page-heading reveal">
             <div>
               <div className="eyebrow">
-                <span className="eyebrow-line" /> MULTICHAIN INVESTIGATION (10+ NETWORKS)
+                <span className="eyebrow-line" /> MULTICHAIN FORENSICS (10+ NETWORKS)
               </div>
               <h1 className="display">
                 Wallet <em>overview</em>
               </h1>
               <p className="heading-copy">
-                Cross-chain holdings, Wallet Linkability Score, historical performance charts, and Blockscout-verified risk signals across 10+ EVM chains.
+                Cross-chain holdings, poisoning detection, token approval review, Wallet Linkability Score, and historical performance charts.
               </p>
             </div>
             <div className="workspace-stamp">
@@ -666,17 +516,17 @@ function Dashboard() {
                   <em>Follow the evidence.</em>
                 </h2>
                 <p>
-                  Enter a public wallet address to assemble its cross-chain holdings across 10+ networks, Wallet Linkability Score, historical performance charts, and Blockscout-verifiable security signals.
+                  Enter any public EVM address to run parallel forensic checks across 10+ Blockscout networks, inspect active token approvals, flag address poisoning lookalikes, and evaluate cross-chain linkability.
                 </p>
                 <div className="welcome-details">
                   <span>
-                    <span className="detail-index">01</span> 10+ CHAIN SNAPSHOT
+                    <span className="detail-index">01</span> 10+ CHAIN SCAN
                   </span>
                   <span>
-                    <span className="detail-index">02</span> LINKABILITY & CHARTS
+                    <span className="detail-index">02</span> POISONING & APPROVALS
                   </span>
                   <span>
-                    <span className="detail-index">03</span> BLOCKSCOUT VERIFICATION
+                    <span className="detail-index">03</span> LINKABILITY & CHARTS
                   </span>
                 </div>
               </div>
@@ -802,7 +652,7 @@ function Dashboard() {
                           <ArrowRight size={14} />
                         </button>
                         <a
-                          href={blockscoutUrl(1, 'address', submittedAddress)}
+                          href={`https://eth.blockscout.com/address/${submittedAddress}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="identity-link"
@@ -818,9 +668,9 @@ function Dashboard() {
                         NETWORK COVERAGE ({chains.length} CHAINS)
                       </div>
                       <div className="chain-badges">
-                        {chains.map((chain) => (
+                        {chains.map((chain: any) => (
                           <a
-                            href={blockscoutUrl(chain.chainId, 'address', submittedAddress)}
+                            href={chain.addressExplorerUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="chain-pill"
@@ -839,8 +689,7 @@ function Dashboard() {
                       <div className="coverage-note">
                         <Activity size={14} />
                         <span>
-                          {lifetimeTxCount.toLocaleString()} lifetime transactions ·{' '}
-                          {transactions.length} recent records analyzed
+                          {riskSignals.length} risk signals · {approvals.length} approvals tracked
                         </span>
                       </div>
                       {hasPartialChains && (
@@ -851,714 +700,688 @@ function Dashboard() {
                     </div>
                   </section>
 
-                  <div className="content-grid reveal reveal-delay-1">
-                    <section className="panel holdings-panel">
-                      <div className="panel-heading">
-                        <div>
-                          <div className="section-overline">01 / PORTFOLIO</div>
-                          <h2>Asset allocation</h2>
-                        </div>
-                        <button
-                          className="panel-menu"
-                          onClick={() =>
-                            document
-                              .getElementById('asset-list')
-                              ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-                          }
-                          aria-label="Jump to asset list"
-                          data-testid="button-jump-assets"
-                        >
-                          <ChevronDown size={16} />
-                        </button>
-                      </div>
-                      {valuedAssets.length === 0 ? (
-                        <div className="panel-empty" data-testid="empty-portfolio">
-                          <div className="empty-ring">
-                            <Activity size={17} />
-                          </div>
-                          <strong>No priced assets returned</strong>
-                          <span>
-                            Balances are present, but current price data is unavailable.
-                          </span>
-                        </div>
-                      ) : (
-                        <>
-                          <div
-                            className="allocation-visual"
-                            data-testid="chart-token-allocation"
-                            aria-label="Pie chart showing token allocation by returned value"
-                          >
-                            <div className="allocation-chart">
-                              <ResponsiveContainer width="100%" height="100%">
-                                <PieChart>
-                                  <Pie
-                                    data={valuedAssets}
-                                    dataKey="value"
-                                    nameKey="symbol"
-                                    innerRadius="63%"
-                                    outerRadius="83%"
-                                    paddingAngle={2}
-                                    stroke="none"
-                                    isAnimationActive={false}
-                                  >
-                                    {valuedAssets.map((asset, index) => (
-                                      <Cell
-                                        key={asset.key}
-                                        fill={
-                                          allocationColors[index % allocationColors.length]
-                                        }
-                                        data-testid={`slice-allocation-${asset.key}`}
-                                      />
-                                    ))}
-                                  </Pie>
-                                  <ChartTooltip
-                                    formatter={(value) => currency(Number(value))}
-                                  />
-                                </PieChart>
-                              </ResponsiveContainer>
-                              <div className="allocation-center">
-                                <span>EST. VALUE</span>
-                                <strong>{currency(totalValue)}</strong>
-                              </div>
-                            </div>
-                            <div className="allocation-legend">
-                              {valuedAssets.slice(0, 5).map((asset, index) => (
-                                <span key={asset.key}>
-                                  <i
-                                    style={{
-                                      background:
-                                        allocationColors[index % allocationColors.length],
-                                    }}
-                                  />
-                                  {asset.symbol}
-                                </span>
-                              ))}
-                              {valuedAssets.length > 5 && (
-                                <span>+{valuedAssets.length - 5} more</span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="asset-list" id="asset-list">
-                            <Table className="asset-table">
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>Asset</TableHead>
-                                  <TableHead>Balance</TableHead>
-                                  <TableHead>Value</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {holdingsByChain.map(({ chain, assets }) => (
-                                  <Fragment key={chain.chainId}>
-                                    <TableRow
-                                      className="chain-group-row"
-                                      data-testid={`group-chain-${chain.chainId}`}
-                                    >
-                                      <TableCell colSpan={3}>
-                                        <span className="chain-mark">
-                                          {chain.nativeSymbol.slice(0, 1)}
-                                        </span>
-                                        {chain.chainName}
-                                        <span className="chain-asset-count">
-                                          {assets.length} position
-                                          {assets.length === 1 ? '' : 's'}
-                                        </span>
-                                      </TableCell>
-                                    </TableRow>
-                                    {assets.map((asset, index) => (
-                                      <TableRow
-                                        className="asset-row"
-                                        key={asset.key}
-                                        data-testid={`row-asset-${asset.key}`}
-                                      >
-                                        <TableCell>
-                                          <div className="asset-cell">
-                                            <div
-                                              className="asset-icon"
-                                              style={
-                                                {
-                                                  '--asset-color':
-                                                    allocationColors[
-                                                      index % allocationColors.length
-                                                    ],
-                                                } as CSSProperties
-                                              }
-                                            >
-                                              {asset.iconUrl ? (
-                                                <img
-                                                  src={asset.iconUrl}
-                                                  alt=""
-                                                  onError={(event) => {
-                                                    event.currentTarget.style.display =
-                                                      'none';
-                                                  }}
-                                                  data-testid={`img-token-${asset.key}`}
-                                                />
-                                              ) : (
-                                                <span>{asset.symbol.slice(0, 1)}</span>
-                                              )}
-                                            </div>
-                                            <div className="asset-name">
-                                              <strong>{asset.name}</strong>
-                                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                                                <button
-                                                  className="address-button asset-address"
-                                                  onClick={() =>
-                                                    setIdentityAddress(asset.address)
-                                                  }
-                                                  data-testid={`button-token-address-${asset.key}`}
-                                                >
-                                                  {compactAddress(asset.address)}
-                                                </button>
-                                                <a
-                                                  href={blockscoutUrl(
-                                                    asset.chainId,
-                                                    asset.native ? 'address' : 'token',
-                                                    asset.address,
-                                                  )}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  className="address-button"
-                                                  title="Verify on Blockscout Explorer"
-                                                  data-testid={`link-explorer-asset-${asset.key}`}
-                                                >
-                                                  <ExternalLink size={12} />
-                                                </a>
-                                              </span>
-                                            </div>
-                                          </div>
-                                        </TableCell>
-                                        <TableCell className="asset-amount mono">
-                                          {asset.amount === null
-                                            ? '—'
-                                            : quantity(asset.amount)}{' '}
-                                          <span>{asset.symbol}</span>
-                                        </TableCell>
-                                        <TableCell
-                                          className="asset-value mono"
-                                          data-testid={`text-value-${asset.key}`}
-                                        >
-                                          {asset.value === null
-                                            ? '—'
-                                            : currency(asset.value)}
-                                        </TableCell>
-                                      </TableRow>
-                                    ))}
-                                  </Fragment>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        </>
-                      )}
-                      <div className="panel-foot">
-                        <span>VALUES AS RETURNED BY SOURCE</span>
-                        <span className="mono">
-                          {holdings.length} POSITION{holdings.length === 1 ? '' : 'S'}
-                        </span>
-                      </div>
-                    </section>
-
-                    <section className="panel risk-panel">
-                      <div className="panel-heading">
-                        <div>
-                          <div className="section-overline">02 / REVIEW NOTES</div>
-                          <h2>Risk signals & Blockscout verification</h2>
-                        </div>
-                        <span className="review-tag">VERIFIABLE ON-CHAIN</span>
-                      </div>
-                      <p className="risk-intro">
-                        Signals below are derived from transactions returned for this address. Click any address or transaction hash to verify directly on Blockscout Explorer.
-                      </p>
-                      <div className="risk-items">
-                        <div
-                          className={`risk-item ${
-                            poisoningMatches.length ? 'risk-attention' : ''
-                          }`}
-                          data-testid="signal-zero-value-lookalike"
-                        >
-                          <div className="risk-symbol">
-                            {poisoningMatches.length ? (
-                              <ShieldAlert size={17} />
-                            ) : (
-                              <ShieldCheck size={17} />
-                            )}
-                          </div>
-                          <div className="risk-copy">
-                            <strong>Address poisoning & lookalike activity</strong>
-                            <span>
-                              {poisoningMatches.length
-                                ? `${poisoningMatches.length} lookalike / zero-value transaction${
-                                    poisoningMatches.length === 1 ? '' : 's'
-                                  } found`
-                                : 'No matching evidence in returned transactions'}
-                            </span>
-                          </div>
-                          <span
-                            className={`risk-status ${
-                              poisoningMatches.length ? 'attention' : ''
-                            }`}
-                          >
-                            {poisoningMatches.length ? 'REVIEW' : 'CLEAR'}
-                          </span>
-                        </div>
-                        <div
-                          className={`risk-item ${
-                            approvalTransactions.length ? 'risk-attention' : ''
-                          }`}
-                          data-testid="signal-approval-evidence"
-                        >
-                          <div className="risk-symbol">
-                            {approvalTransactions.length ? (
-                              <ShieldAlert size={17} />
-                            ) : (
-                              <ShieldCheck size={17} />
-                            )}
-                          </div>
-                          <div className="risk-copy">
-                            <strong>Token approval evidence</strong>
-                            <span>
-                              {approvalTransactions.length
-                                ? `${approvalTransactions.length} approval transaction${
-                                    approvalTransactions.length === 1 ? '' : 's'
-                                  } found`
-                                : 'No approvals found in recent candidate transactions'}
-                            </span>
-                          </div>
-                          <span
-                            className={`risk-status ${
-                              approvalTransactions.length ? 'attention' : ''
-                            }`}
-                          >
-                            {approvalTransactions.length ? 'REVIEW' : 'CLEAR'}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="risk-foot">
-                        <CircleHelp size={14} />
-                        <span>
-                          Every finding links directly to Blockscout Explorer for independent verification.
-                        </span>
-                      </div>
-                      {poisoningMatches.length > 0 && (
-                        <div
-                          className="evidence-list"
-                          data-testid="list-lookalike-evidence"
-                        >
-                          <span className="evidence-label">
-                            POISONING & LOOKALIKE EVIDENCE (VERIFY ON BLOCKSCOUT)
-                          </span>
-                          {poisoningMatches.slice(0, 5).map((tx) => (
-                            <div
-                              key={`${tx.chain}-${tx.hash}`}
-                              className="evidence-row"
-                            >
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                                <button
-                                  className="address-button mono"
-                                  onClick={() =>
-                                    setIdentityAddress(tx.suspiciousAddress)
-                                  }
-                                  data-testid={`button-suspicious-address-${tx.hash}`}
-                                >
-                                  {compactAddress(tx.suspiciousAddress)}
-                                </button>
-                                <a
-                                  href={blockscoutUrl(
-                                    tx.chainId,
-                                    'address',
-                                    tx.suspiciousAddress,
-                                  )}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="address-button"
-                                  title="Open suspicious address in Blockscout Explorer"
-                                  data-testid={`link-explorer-poison-address-${tx.hash}`}
-                                >
-                                  <ExternalLink size={12} />
-                                </a>
-                              </span>
-                              <span>{tx.chain}</span>
-                              <a
-                                href={blockscoutUrl(tx.chainId, 'tx', tx.hash)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="address-button mono"
-                                title="Verify poisoning transaction in Blockscout Explorer"
-                                data-testid={`link-explorer-poison-tx-${tx.hash}`}
-                              >
-                                {compactAddress(tx.hash)} <ExternalLink size={12} />
-                              </a>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {approvalTransactions.length > 0 && (
-                        <div
-                          className="evidence-list"
-                          data-testid="list-approval-evidence"
-                        >
-                          <span className="evidence-label">
-                            APPROVAL TRANSACTIONS & SPENDERS (VERIFY ON BLOCKSCOUT)
-                          </span>
-                          {approvalTransactions.slice(0, 5).map((tx) => (
-                            <div
-                              key={`${tx.chain}-${tx.hash}`}
-                              className="evidence-row"
-                            >
-                              <span>{tx.method}</span>
-                              <span>
-                                <a
-                                  href={blockscoutUrl(
-                                    tx.chainId,
-                                    'address',
-                                    tx.spenderAddress,
-                                  )}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="address-button mono"
-                                  title="Inspect spender contract on Blockscout"
-                                  data-testid={`link-explorer-approval-spender-${tx.hash}`}
-                                >
-                                  Spender {compactAddress(tx.spenderAddress)}{' '}
-                                  <ExternalLink size={12} />
-                                </a>
-                              </span>
-                              <a
-                                href={blockscoutUrl(tx.chainId, 'tx', tx.hash)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="address-button mono"
-                                title="Verify approval transaction on Blockscout"
-                                data-testid={`link-explorer-approval-tx-${tx.hash}`}
-                              >
-                                {compactAddress(tx.hash)} <ExternalLink size={12} />
-                              </a>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </section>
+                  {/* Navigation Tabs for Investigation Sections */}
+                  <div className="flex flex-wrap gap-2 border-b border-border pb-2 pt-2">
+                    {[
+                      { id: 'overview', label: `Portfolio & Activity` },
+                      { id: 'risks', label: `Risk Signals & Poisoning (${riskSignals.length})` },
+                      { id: 'approvals', label: `Token Approvals (${approvals.length})` },
+                      { id: 'linkability', label: `Wallet Linkability (${linkability?.score ?? 0}/100)` },
+                      { id: 'history', label: `Historical Performance Charts` },
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActiveTab(tab.id as typeof activeTab)}
+                        className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition ${
+                          activeTab === tab.id
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-card text-muted-foreground hover:bg-secondary'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
                   </div>
 
-                  {/* NEW SECTION: Wallet Linkability Score & Historical Performance Charts */}
-                  <div className="content-grid reveal reveal-delay-1">
-                    <section
-                      className="panel"
-                      data-testid="section-wallet-linkability"
-                    >
-                      <div className="panel-heading">
-                        <div>
-                          <div className="section-overline">
-                            03 / CROSS-CHAIN CORRELATION
+                  {/* TAB 1: Overview (Holdings & Transactions) */}
+                  {activeTab === 'overview' && (
+                    <div className="content-grid reveal reveal-delay-1">
+                      <section className="panel holdings-panel">
+                        <div className="panel-heading">
+                          <div>
+                            <div className="section-overline">01 / PORTFOLIO</div>
+                            <h2>Asset allocation</h2>
                           </div>
+                          <button
+                            className="panel-menu"
+                            onClick={() =>
+                              document
+                                .getElementById('asset-list')
+                                ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+                            }
+                            aria-label="Jump to asset list"
+                            data-testid="button-jump-assets"
+                          >
+                            <ChevronDown size={16} />
+                          </button>
+                        </div>
+                        {valuedAssets.length === 0 ? (
+                          <div className="panel-empty" data-testid="empty-portfolio">
+                            <div className="empty-ring">
+                              <Activity size={17} />
+                            </div>
+                            <strong>No priced assets returned</strong>
+                            <span>
+                              Balances are present, but current price data is unavailable.
+                            </span>
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              className="allocation-visual"
+                              data-testid="chart-token-allocation"
+                            >
+                              <div className="allocation-chart">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <PieChart>
+                                    <Pie
+                                      data={valuedAssets}
+                                      dataKey="value"
+                                      nameKey="symbol"
+                                      innerRadius="63%"
+                                      outerRadius="83%"
+                                      paddingAngle={2}
+                                      stroke="none"
+                                      isAnimationActive={false}
+                                    >
+                                      {valuedAssets.map((asset, index) => (
+                                        <Cell
+                                          key={asset.key}
+                                          fill={
+                                            allocationColors[index % allocationColors.length]
+                                          }
+                                        />
+                                      ))}
+                                    </Pie>
+                                    <ChartTooltip
+                                      formatter={(value) => currency(Number(value))}
+                                    />
+                                  </PieChart>
+                                </ResponsiveContainer>
+                                <div className="allocation-center">
+                                  <span>EST. VALUE</span>
+                                  <strong>{currency(totalValue)}</strong>
+                                </div>
+                              </div>
+                              <div className="allocation-legend">
+                                {valuedAssets.slice(0, 5).map((asset, index) => (
+                                  <span key={asset.key}>
+                                    <i
+                                      style={{
+                                        background:
+                                          allocationColors[index % allocationColors.length],
+                                      }}
+                                    />
+                                    {asset.symbol}
+                                  </span>
+                                ))}
+                                {valuedAssets.length > 5 && (
+                                  <span>+{valuedAssets.length - 5} more</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="asset-list" id="asset-list">
+                              <Table className="asset-table">
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>Asset</TableHead>
+                                    <TableHead>Balance</TableHead>
+                                    <TableHead>Value</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {holdingsByChain.map(({ chain, assets }) => (
+                                    <Fragment key={chain.chainId}>
+                                      <TableRow className="chain-group-row">
+                                        <TableCell colSpan={3}>
+                                          <span className="chain-mark">
+                                            {chain.nativeSymbol.slice(0, 1)}
+                                          </span>
+                                          {chain.chainName}
+                                          <span className="chain-asset-count">
+                                            {assets.length} position
+                                            {assets.length === 1 ? '' : 's'}
+                                          </span>
+                                        </TableCell>
+                                      </TableRow>
+                                      {assets.map((asset, index) => (
+                                        <TableRow className="asset-row" key={asset.key}>
+                                          <TableCell>
+                                            <div className="asset-cell">
+                                              <div
+                                                className="asset-icon"
+                                                style={
+                                                  {
+                                                    '--asset-color':
+                                                      allocationColors[
+                                                        index % allocationColors.length
+                                                      ],
+                                                  } as CSSProperties
+                                                }
+                                              >
+                                                {asset.iconUrl ? (
+                                                  <img
+                                                    src={asset.iconUrl}
+                                                    alt=""
+                                                    onError={(event) => {
+                                                      event.currentTarget.style.display =
+                                                        'none';
+                                                    }}
+                                                  />
+                                                ) : (
+                                                  <span>{asset.symbol.slice(0, 1)}</span>
+                                                )}
+                                              </div>
+                                              <div className="asset-name">
+                                                <strong>{asset.name}</strong>
+                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                                  <button
+                                                    className="address-button asset-address"
+                                                    onClick={() =>
+                                                      setIdentityAddress(asset.address)
+                                                    }
+                                                  >
+                                                    {compactAddress(asset.address)}
+                                                  </button>
+                                                  {asset.explorerUrl && (
+                                                    <a
+                                                      href={asset.explorerUrl}
+                                                      target="_blank"
+                                                      rel="noopener noreferrer"
+                                                      className="address-button"
+                                                      title="Verify on Blockscout Explorer"
+                                                    >
+                                                      <ExternalLink size={12} />
+                                                    </a>
+                                                  )}
+                                                </span>
+                                              </div>
+                                            </div>
+                                          </TableCell>
+                                          <TableCell className="asset-amount mono">
+                                            {asset.amount === null
+                                              ? '—'
+                                              : quantity(asset.amount)}{' '}
+                                            <span>{asset.symbol}</span>
+                                          </TableCell>
+                                          <TableCell className="asset-value mono">
+                                            {asset.value === null
+                                              ? '—'
+                                              : currency(asset.value)}
+                                          </TableCell>
+                                        </TableRow>
+                                      ))}
+                                    </Fragment>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </>
+                        )}
+                        <div className="panel-foot">
+                          <span>VALUES AS RETURNED BY SOURCE</span>
+                          <span className="mono">
+                            {holdings.length} POSITION{holdings.length === 1 ? '' : 'S'}
+                          </span>
+                        </div>
+                      </section>
+
+                      <section className="panel transactions-panel">
+                        <div className="panel-heading transaction-heading">
+                          <div>
+                            <div className="section-overline">02 / RECENT ACTIVITY</div>
+                            <h2>
+                              Transactions{' '}
+                              <span className="count-badge">{transactions.length}</span>
+                            </h2>
+                          </div>
+                          <span className="transaction-source">
+                            <span className="live-dot" /> VERIFIED BY BLOCKSCOUT
+                          </span>
+                        </div>
+                        {transactions.length === 0 ? (
+                          <div className="transaction-empty">
+                            <Activity size={18} />
+                            <span>
+                              No recent transactions were returned for these networks.
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="table-wrap">
+                            <table>
+                              <thead>
+                                {chains.length > 0 && (
+                                  <tr>
+                                    <th>TRANSACTION</th>
+                                    <th>NETWORK</th>
+                                    <th>METHOD</th>
+                                    <th>COUNTERPARTY</th>
+                                    <th>VALUE</th>
+                                    <th>STATUS</th>
+                                  </tr>
+                                )}
+                              </thead>
+                              <tbody>
+                                {transactions.slice(0, 12).map((tx: any, index: number) => {
+                                  const outgoing =
+                                    tx.from.toLowerCase() ===
+                                    submittedAddress.toLowerCase();
+                                  const counterpart = outgoing ? tx.to : tx.from;
+                                  return (
+                                    <tr key={`${tx.chainId}-${tx.hash}-${index}`}>
+                                      <td>
+                                        <span className="tx-direction">
+                                          {outgoing ? (
+                                            <ArrowUpRight size={14} />
+                                          ) : (
+                                            <ArrowDownLeft size={14} />
+                                          )}
+                                        </span>
+                                        <a
+                                          href={tx.explorerTxUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="mono tx-hash address-button"
+                                          title="Open transaction in Blockscout Explorer"
+                                        >
+                                          {compactAddress(tx.hash)}{' '}
+                                          <ExternalLink size={12} />
+                                        </a>
+                                        <span className="tx-time">
+                                          {new Date(tx.timestamp).toLocaleDateString(
+                                            undefined,
+                                            { month: 'short', day: 'numeric' },
+                                          )}
+                                        </span>
+                                      </td>
+                                      <td>
+                                        <span className="table-chain">{tx.chain}</span>
+                                      </td>
+                                      <td>
+                                        <span className="method-pill">
+                                          {tx.method || 'Transfer'}
+                                        </span>
+                                      </td>
+                                      <td className="mono counterpart">
+                                        {counterpart ? (
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                            <button
+                                              className="address-button"
+                                              onClick={() =>
+                                                setIdentityAddress(counterpart)
+                                              }
+                                            >
+                                              {compactAddress(counterpart)}
+                                            </button>
+                                            <a
+                                              href={tx.explorerToUrl || `https://eth.blockscout.com/address/${counterpart}`}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="address-button"
+                                              title="Open counterparty in Blockscout Explorer"
+                                            >
+                                              <ExternalLink size={12} />
+                                            </a>
+                                          </span>
+                                        ) : (
+                                          'Contract creation'
+                                        )}
+                                      </td>
+                                      <td className="mono tx-value">
+                                        {quantity(tx.value, 6)}
+                                      </td>
+                                      <td>
+                                        <span
+                                          className={`tx-status ${
+                                            String(tx.status).toLowerCase() === 'success' ||
+                                            String(tx.status).toLowerCase() === 'ok'
+                                              ? 'status-success'
+                                              : 'status-other'
+                                          }`}
+                                        >
+                                          <i />
+                                          {tx.status}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        <div className="panel-foot">
+                          <span>
+                            LIFETIME HISTORY: {lifetimeTxCount.toLocaleString()} TXS · RECENT SAMPLE
+                          </span>
+                          <span className="mono">
+                            {transactions.length > 12 ? 'SHOWING 12 OF ' : 'SHOWING '}
+                            {transactions.length}
+                          </span>
+                        </div>
+                      </section>
+                    </div>
+                  )}
+
+                  {/* TAB 2: Risk Signals & Address Poisoning */}
+                  {activeTab === 'risks' && (
+                    <section className="panel" style={{ padding: '24px' }}>
+                      <div className="panel-heading" style={{ marginBottom: '16px' }}>
+                        <div>
+                          <div className="section-overline">SECURITY FORENSICS</div>
+                          <h2>Address Poisoning & Risk Signals ({riskSignals.length})</h2>
+                        </div>
+                        <span className="review-tag">BLOCKSCOUT VERIFIED</span>
+                      </div>
+                      {riskSignals.length === 0 ? (
+                        <div className="panel-empty" style={{ minHeight: '140px' }}>
+                          <ShieldCheck size={28} style={{ color: '#10b981', marginBottom: 8 }} />
+                          <strong>No risk signals detected</strong>
+                          <span>Scanned recent transaction history for address poisoning lookalikes and unrevoked unlimited allowances.</span>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'grid', gap: '12px' }}>
+                          {riskSignals.map((signal: any) => (
+                            <div
+                              key={signal.id}
+                              style={{
+                                padding: '16px',
+                                borderRadius: '8px',
+                                border: '1px solid hsl(var(--border))',
+                                background: 'hsl(var(--card))',
+                                display: 'grid',
+                                gap: '8px',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                                      signal.severity === 'critical' || signal.severity === 'high'
+                                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                    }`}
+                                  >
+                                    {signal.severity}
+                                  </span>
+                                  <strong style={{ fontSize: '13px' }}>{signal.title}</strong>
+                                </div>
+                                <span className="mono text-xs text-muted-foreground">{signal.chainName}</span>
+                              </div>
+                              <p style={{ fontSize: '11px', color: 'hsl(var(--muted-foreground))', margin: 0 }}>
+                                {signal.description}
+                              </p>
+                              <div style={{ display: 'flex', gap: '12px', paddingTop: '4px', fontSize: '11px' }}>
+                                {signal.explorerTxUrl && (
+                                  <a
+                                    href={signal.explorerTxUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="identity-link"
+                                    style={{ margin: 0, padding: 0 }}
+                                  >
+                                    <span>Verify Transaction on Blockscout</span>
+                                    <ExternalLink size={12} />
+                                  </a>
+                                )}
+                                {signal.explorerAddressUrl && (
+                                  <a
+                                    href={signal.explorerAddressUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="identity-link"
+                                    style={{ margin: 0, padding: 0 }}
+                                  >
+                                    <span>Inspect Address ({compactAddress(signal.targetAddress || '')})</span>
+                                    <ExternalLink size={12} />
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="panel-foot" style={{ marginTop: '20px' }}>
+                        <span>HEURISTIC FORENSIC ANALYSIS</span>
+                        <span className="mono">{riskSignals.length} SIGNAL(S)</span>
+                      </div>
+                    </section>
+                  )}
+
+                  {/* TAB 3: Token Approvals */}
+                  {activeTab === 'approvals' && (
+                    <section className="panel" style={{ padding: '24px' }}>
+                      <div className="panel-heading" style={{ marginBottom: '16px' }}>
+                        <div>
+                          <div className="section-overline">ALLOWANCE AUDIT</div>
+                          <h2>Token Approvals & Spender Review ({approvals.length})</h2>
+                        </div>
+                        <span className="review-tag">CALDATA DECODED</span>
+                      </div>
+                      {approvals.length === 0 ? (
+                        <div className="panel-empty" style={{ minHeight: '140px' }}>
+                          <KeyRound size={28} style={{ color: '#10b981', marginBottom: 8 }} />
+                          <strong>No active approval transactions found</strong>
+                          <span>No ERC-20 / NFT approval or allowance modification logs were found in the recent sampled history.</span>
+                        </div>
+                      ) : (
+                        <div className="table-wrap">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>CHAIN</th>
+                                <th>TOKEN / ASSET</th>
+                                <th>SPENDER CONTRACT</th>
+                                <th>ALLOWANCE STATUS</th>
+                                <th>METHOD</th>
+                                <th style={{ textAlign: 'right' }}>EXPLORER VERIFICATION</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {approvals.map((app: any) => (
+                                <tr key={app.hash}>
+                                  <td><strong>{app.chainName}</strong></td>
+                                  <td>
+                                    <a
+                                      href={app.tokenExplorerUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="address-button mono"
+                                    >
+                                      {app.tokenAddress ? compactAddress(app.tokenAddress) : 'Token'} <ExternalLink size={12} />
+                                    </a>
+                                  </td>
+                                  <td>
+                                    <a
+                                      href={app.spenderExplorerUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="address-button mono"
+                                    >
+                                      {compactAddress(app.spenderAddress)} <ExternalLink size={12} />
+                                    </a>
+                                  </td>
+                                  <td>
+                                    <span
+                                      className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                                        app.allowanceType === 'unlimited'
+                                          ? 'bg-rose-500/20 text-rose-300'
+                                          : app.allowanceType === 'revoked'
+                                            ? 'bg-emerald-500/20 text-emerald-300'
+                                            : 'bg-amber-500/20 text-amber-300'
+                                      }`}
+                                    >
+                                      {app.formattedAllowance}
+                                    </span>
+                                  </td>
+                                  <td className="mono">{app.method}</td>
+                                  <td style={{ textAlign: 'right' }}>
+                                    <a
+                                      href={app.txExplorerUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="identity-link"
+                                      style={{ display: 'inline-flex', justifyContent: 'flex-end', margin: 0, padding: 0 }}
+                                    >
+                                      <span>Verify Tx</span>
+                                      <ExternalLink size={12} />
+                                    </a>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                      <div className="panel-foot" style={{ marginTop: '20px' }}>
+                        <span>ZERO-EXTRA-CALL CALDATA PARSING</span>
+                        <span className="mono">{approvals.length} RECORD(S)</span>
+                      </div>
+                    </section>
+                  )}
+
+                  {/* TAB 4: Wallet Linkability Score */}
+                  {activeTab === 'linkability' && linkability && (
+                    <section className="panel" style={{ padding: '24px' }}>
+                      <div className="panel-heading" style={{ marginBottom: '16px' }}>
+                        <div>
+                          <div className="section-overline">CROSS-CHAIN CORRELATION</div>
                           <h2>Wallet Linkability Score</h2>
                         </div>
                         <span className="review-tag" data-testid="text-linkability-score">
                           {linkability.score} / 100 · {linkability.level}
                         </span>
                       </div>
-                      <p className="risk-intro">
-                        Measures how easily this address can be clustered across networks based on active chain reuse ({linkability.activeChainCount}/{chains.length} chains), shared cross-chain counterparties ({linkability.sharedCounterparties.length}), and overlapping UTC activity windows ({linkability.overlappingHours}).
+                      <p className="risk-intro" style={{ maxWidth: '100%' }}>
+                        Measures how easily this address can be clustered across networks based on active chain reuse ({linkability.activeChainCount}/{chains.length} chains) and shared cross-chain counterparties ({linkability.sharedCounterparties.length}).
                       </p>
-                      <div className="risk-items">
-                        <div className="risk-item">
-                          <div className="risk-symbol">
-                            <Link2 size={17} />
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginTop: '16px' }}>
+                        <div style={{ padding: '16px', borderRadius: '8px', border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'hsl(var(--primary))', marginBottom: '8px' }}>
+                            <Link2 size={18} />
+                            <strong>Multi-Chain Footprint</strong>
                           </div>
-                          <div className="risk-copy">
-                            <strong>Multi-Chain Address Footprint</strong>
-                            <span>
-                              Active on {linkability.activeChainCount} of {chains.length} inspected EVM networks
-                            </span>
-                          </div>
-                          <span className="risk-status">
-                            {linkability.score}/100
-                          </span>
+                          <p style={{ fontSize: '11px', color: 'hsl(var(--muted-foreground))', margin: 0 }}>
+                            Active across <strong>{linkability.activeChainCount}</strong> of {chains.length} inspected EVM networks.
+                          </p>
                         </div>
-                        <div className="risk-item">
-                          <div className="risk-symbol">
-                            <Fingerprint size={17} />
+                        <div style={{ padding: '16px', borderRadius: '8px', border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'hsl(var(--accent))', marginBottom: '8px' }}>
+                            <Fingerprint size={18} />
+                            <strong>Shared Counterparties</strong>
                           </div>
-                          <div className="risk-copy">
-                            <strong>Shared Cross-Chain Counterparties</strong>
-                            <span>
-                              {linkability.sharedCounterparties.length
-                                ? `${linkability.sharedCounterparties.length} address(es) interacted with across 2+ networks`
-                                : 'No repeated counterparties across multiple networks'}
-                            </span>
-                          </div>
-                          <span className="risk-status">
-                            {linkability.sharedCounterparties.length} SHARED
-                          </span>
+                          <p style={{ fontSize: '11px', color: 'hsl(var(--muted-foreground))', margin: 0 }}>
+                            <strong>{linkability.sharedCounterparties.length}</strong> counterparty address(es) interacted with across 2+ chains.
+                          </p>
                         </div>
                       </div>
+
                       {linkability.sharedCounterparties.length > 0 && (
-                        <div
-                          className="evidence-list"
-                          data-testid="list-shared-counterparties"
-                        >
-                          <span className="evidence-label">
-                            CROSS-CHAIN COUNTERPARTIES (VERIFY ON BLOCKSCOUT)
+                        <div style={{ marginTop: '20px' }}>
+                          <span className="evidence-label" style={{ display: 'block', marginBottom: '8px' }}>
+                            SHARED COUNTERPARTIES (VERIFY ON BLOCKSCOUT)
                           </span>
-                          {linkability.sharedCounterparties.slice(0, 4).map((item) => (
-                            <div key={item.address} className="evidence-row">
-                              <button
-                                className="address-button mono"
-                                onClick={() => setIdentityAddress(item.address)}
-                              >
-                                {compactAddress(item.address)}
-                              </button>
-                              <span>{item.chains.join(', ')}</span>
-                              <a
-                                href={blockscoutUrl(
-                                  item.chains[0],
-                                  'address',
-                                  item.address,
-                                )}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="address-button mono"
-                              >
-                                Blockscout <ExternalLink size={12} />
-                              </a>
-                            </div>
-                          ))}
+                          <div className="table-wrap">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>COUNTERPARTY ADDRESS</th>
+                                  <th>NETWORKS SEEN</th>
+                                  <th>INTERACTIONS</th>
+                                  <th style={{ textAlign: 'right' }}>EXPLORER</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {linkability.sharedCounterparties.map((item: any) => (
+                                  <tr key={item.address}>
+                                    <td className="mono">
+                                      <button
+                                        className="address-button"
+                                        onClick={() => setIdentityAddress(item.address)}
+                                      >
+                                        {compactAddress(item.address)}
+                                      </button>
+                                    </td>
+                                    <td>{item.chains.join(', ')}</td>
+                                    <td className="mono">{item.txCount} txs</td>
+                                    <td style={{ textAlign: 'right' }}>
+                                      <a
+                                        href={item.explorerUrl || `https://eth.blockscout.com/address/${item.address}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="identity-link"
+                                        style={{ display: 'inline-flex', justifyContent: 'flex-end', margin: 0, padding: 0 }}
+                                      >
+                                        <span>Blockscout</span>
+                                        <ExternalLink size={12} />
+                                      </a>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       )}
+                      <div className="panel-foot" style={{ marginTop: '20px' }}>
+                        <span>DETERMINISTIC CLUSTERING METRIC</span>
+                        <span className="mono">{linkability.score}/100 SCORE</span>
+                      </div>
                     </section>
+                  )}
 
-                    <section
-                      className="panel"
-                      data-testid="section-historical-charts"
-                    >
-                      <div className="panel-heading">
+                  {/* TAB 5: Historical Performance Charts */}
+                  {activeTab === 'history' && (
+                    <section className="panel" style={{ padding: '24px' }}>
+                      <div className="panel-heading" style={{ marginBottom: '16px' }}>
                         <div>
-                          <div className="section-overline">
-                            04 / HISTORICAL PERFORMANCE & ACTIVITY
-                          </div>
+                          <div className="section-overline">PERFORMANCE & VOLUME</div>
                           <h2>Historical performance charts</h2>
                         </div>
-                        <span className="review-tag">
-                          {lifetimeTxCount.toLocaleString()} LIFETIME TXS
-                        </span>
+                        <span className="review-tag">{lifetimeTxCount.toLocaleString()} LIFETIME TXS</span>
                       </div>
-                      {historicalSeries.length === 0 ? (
-                        <div className="panel-empty">
-                          <div className="empty-ring">
-                            <TrendingUp size={17} />
-                          </div>
+                      {history.length === 0 ? (
+                        <div className="panel-empty" style={{ minHeight: '160px' }}>
+                          <TrendingUp size={28} style={{ marginBottom: 8 }} />
                           <strong>No historical activity points</strong>
-                          <span>
-                            No timestamped transactions were returned for this address.
-                          </span>
+                          <span>No timestamped transactions were returned for this address.</span>
                         </div>
                       ) : (
-                        <div style={{ display: 'grid', gap: '16px', padding: '8px 0' }}>
-                          <div style={{ height: 160 }}>
-                            <div className="side-stat-label" style={{ marginBottom: 6 }}>
-                              CUMULATIVE & DAILY TRANSACTION VOLUME (USD)
+                        <div style={{ display: 'grid', gap: '24px' }}>
+                          <div style={{ height: 220 }}>
+                            <div className="side-stat-label" style={{ marginBottom: 8 }}>
+                              CUMULATIVE & DAILY VOLUME (USD)
                             </div>
                             <ResponsiveContainer width="100%" height="100%">
-                              <AreaChart data={historicalSeries}>
+                              <AreaChart data={history}>
                                 <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                                 <XAxis dataKey="date" fontSize={11} />
                                 <YAxis fontSize={11} />
-                                <ChartTooltip
-                                  formatter={(value) => currency(Number(value))}
-                                />
+                                <ChartTooltip formatter={(value) => currency(Number(value))} />
                                 <Area
                                   type="monotone"
-                                  dataKey="cumulativeUsd"
-                                  name="Cumulative Volume"
+                                  dataKey="volumeUsd"
+                                  name="Daily Volume (USD)"
                                   stroke="#26776e"
                                   fill="#26776e"
-                                  fillOpacity={0.22}
+                                  fillOpacity={0.25}
                                 />
                               </AreaChart>
                             </ResponsiveContainer>
                           </div>
-                          <div style={{ height: 140 }}>
-                            <div className="side-stat-label" style={{ marginBottom: 6 }}>
-                              MULTICHAIN TRANSACTION FREQUENCY BY DATE
+                          <div style={{ height: 180 }}>
+                            <div className="side-stat-label" style={{ marginBottom: 8 }}>
+                              DAILY TRANSACTION FREQUENCY
                             </div>
                             <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={historicalSeries}>
+                              <BarChart data={history}>
                                 <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                                 <XAxis dataKey="date" fontSize={11} />
                                 <YAxis fontSize={11} />
                                 <ChartTooltip />
-                                <Bar
-                                  dataKey="txCount"
-                                  name="Transactions"
-                                  fill="#dc714d"
-                                  radius={[3, 3, 0, 0]}
-                                />
+                                <Bar dataKey="txCount" name="Transactions" fill="#dc714d" radius={[3, 3, 0, 0]} />
                               </BarChart>
                             </ResponsiveContainer>
                           </div>
                         </div>
                       )}
-                      <div className="panel-foot">
-                        <span>
-                           LIFETIME TOTAL: {lifetimeTxCount.toLocaleString()} TXS ACROSS {chains.length} NETWORKS
-                        </span>
-                        <span className="mono">
-                          {historicalSeries.length} ACTIVE DAY{historicalSeries.length === 1 ? '' : 'S'}
-                        </span>
+                      <div className="panel-foot" style={{ marginTop: '20px' }}>
+                        <span>LIFETIME ACTIVITY AGGREGATION</span>
+                        <span className="mono">{history.length} ACTIVE DAY(S)</span>
                       </div>
                     </section>
-                  </div>
-
-                  <section className="panel transactions-panel reveal reveal-delay-2">
-                    <div className="panel-heading transaction-heading">
-                      <div>
-                        <div className="section-overline">05 / RECENT ACTIVITY</div>
-                        <h2>
-                          Transactions{' '}
-                          <span className="count-badge">{transactions.length}</span>
-                        </h2>
-                      </div>
-                      <span className="transaction-source">
-                        <span className="live-dot" /> VERIFIED BY BLOCKSCOUT
-                      </span>
-                    </div>
-                    {transactions.length === 0 ? (
-                      <div
-                        className="transaction-empty"
-                        data-testid="empty-transactions"
-                      >
-                        <Activity size={18} />
-                        <span>
-                          No recent transactions were returned for these networks.
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="table-wrap">
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>TRANSACTION (BLOCKSCOUT)</th>
-                              <th>NETWORK</th>
-                              <th>METHOD</th>
-                              <th>COUNTERPARTY (BLOCKSCOUT)</th>
-                              <th>VALUE</th>
-                              <th>STATUS</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {transactions.slice(0, 15).map((tx, index) => {
-                              const outgoing =
-                                tx.from.toLowerCase() ===
-                                submittedAddress.toLowerCase();
-                              const counterpart = outgoing ? tx.to : tx.from;
-                              return (
-                                <tr
-                                  key={`${tx.chain}-${tx.hash}-${index}`}
-                                  data-testid={`row-transaction-${tx.hash}`}
-                                >
-                                  <td>
-                                    <span className="tx-direction">
-                                      {outgoing ? (
-                                        <ArrowUpRight size={14} />
-                                      ) : (
-                                        <ArrowDownLeft size={14} />
-                                      )}
-                                    </span>
-                                    <a
-                                      href={blockscoutUrl(
-                                        tx.chainId,
-                                        'tx',
-                                        tx.hash,
-                                      )}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="mono tx-hash address-button"
-                                      data-testid={`link-explorer-tx-${tx.hash}`}
-                                      title="Open transaction in Blockscout Explorer"
-                                    >
-                                      {compactAddress(tx.hash)}{' '}
-                                      <ExternalLink size={12} />
-                                    </a>
-                                    <span className="tx-time">
-                                      {new Date(tx.timestamp).toLocaleDateString(
-                                        undefined,
-                                        { month: 'short', day: 'numeric' },
-                                      )}
-                                    </span>
-                                  </td>
-                                  <td>
-                                    <span className="table-chain">{tx.chain}</span>
-                                  </td>
-                                  <td>
-                                    <span className="method-pill">
-                                      {tx.method || 'Transfer'}
-                                    </span>
-                                  </td>
-                                  <td className="mono counterpart">
-                                    {counterpart ? (
-                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                                        <button
-                                          className="address-button"
-                                          onClick={() =>
-                                            setIdentityAddress(counterpart)
-                                          }
-                                          data-testid={`button-counterparty-${tx.hash}`}
-                                        >
-                                          {compactAddress(counterpart)}
-                                        </button>
-                                        <a
-                                          href={blockscoutUrl(
-                                            tx.chainId,
-                                            'address',
-                                            counterpart,
-                                          )}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="address-button"
-                                          title="Open counterparty in Blockscout Explorer"
-                                          data-testid={`link-explorer-counterparty-${tx.hash}`}
-                                        >
-                                          <ExternalLink size={12} />
-                                        </a>
-                                      </span>
-                                    ) : (
-                                      'Contract creation'
-                                    )}
-                                  </td>
-                                  <td className="mono tx-value">
-                                    {quantity(tx.value, 6)}
-                                  </td>
-                                  <td>
-                                    <span
-                                      className={`tx-status ${
-                                        tx.status.toLowerCase() === 'success' ||
-                                        tx.status.toLowerCase() === 'ok'
-                                          ? 'status-success'
-                                          : 'status-other'
-                                      }`}
-                                    >
-                                      <i />
-                                      {tx.status}
-                                    </span>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                    <div className="panel-foot">
-                      <span>
-                        LIFETIME HISTORY: {lifetimeTxCount.toLocaleString()} TXS · RECENT SAMPLE ANALYZED
-                      </span>
-                      <span className="mono">
-                        {transactions.length > 15 ? 'SHOWING 15 OF ' : 'SHOWING '}
-                        {transactions.length}
-                      </span>
-                    </div>
-                  </section>
+                  )}
                 </>
               )}
             </div>
@@ -1620,7 +1443,7 @@ function Dashboard() {
             </button>
             {identityAddress && (
               <a
-                href={blockscoutUrl(1, 'address', identityAddress)}
+                href={`https://eth.blockscout.com/address/${identityAddress}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="copy-address"
