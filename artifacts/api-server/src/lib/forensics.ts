@@ -8,9 +8,9 @@ export interface ExplorerLinks {
 
 export interface WalletTransaction {
   hash: string;
-  chainId: string;
+  chainId: string | number;
   chainName: string;
-  timestamp: string;
+  timestamp: string | Date;
   from: string;
   to: string | null;
   toName?: string | null;
@@ -35,10 +35,10 @@ export interface WalletTransaction {
 
 export interface ApprovalFinding {
   id: string;
-  chainId: string;
+  chainId: string | number;
   chainName: string;
   txHash: string;
-  timestamp: string;
+  timestamp: string | Date;
   tokenAddress: string;
   tokenName: string;
   tokenSymbol: string;
@@ -68,10 +68,10 @@ export interface RiskSignal {
   severity: "critical" | "high" | "medium" | "low";
   title: string;
   description: string;
-  chainId: string;
+  chainId: string | number;
   chainName: string;
   txHash?: string;
-  timestamp?: string;
+  timestamp?: string | Date;
   targetAddress?: string;
   mimickedAddress?: string;
   tokenAddress?: string;
@@ -95,7 +95,7 @@ export interface LinkabilityFactor {
 }
 
 export interface WalletLinkabilityReport {
-  score: number; // 0 - 100
+  score: number;
   level: "Low" | "Moderate" | "High" | "Critical";
   summary: string;
   activeChainCount: number;
@@ -146,10 +146,6 @@ function isValidEvmAddress(address: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(address);
 }
 
-/**
- * Parses ERC-20 / ERC-721 / ERC-1155 / Permit2 approval details directly from a transaction's
- * decoded_input or raw_input calldata without requiring an extra /logs HTTP call.
- */
 export function parseApprovalFromTx(
   tx: WalletTransaction,
   explorerBaseUrl: string,
@@ -168,10 +164,10 @@ export function parseApprovalFromTx(
   const selector = rawInput.slice(0, 10);
   const methodCall = (tx.decodedInput?.method_call ?? tx.method ?? "").toLowerCase();
 
-  const isApproveSelector = selector === "0x095ea7b3"; // approve(address,uint256)
-  const isIncreaseAllowanceSelector = selector === "0x39509351"; // increaseAllowance(address,uint256)
-  const isDecreaseAllowanceSelector = selector === "0xa457c2d7"; // decreaseAllowance(address,uint256)
-  const isSetApprovalForAllSelector = selector === "0xa22cb465"; // setApprovalForAll(address,bool)
+  const isApproveSelector = selector === "0x095ea7b3";
+  const isIncreaseAllowanceSelector = selector === "0x39509351";
+  const isDecreaseAllowanceSelector = selector === "0xa457c2d7";
+  const isSetApprovalForAllSelector = selector === "0xa22cb465";
 
   const isApproveMethod =
     isApproveSelector ||
@@ -193,24 +189,23 @@ export function parseApprovalFromTx(
   let amountBigInt: bigint | null = null;
   let isSetApprovalBool: boolean | null = null;
 
-  // 1. Try decodedInput parameters first
   const params = tx.decodedInput?.parameters ?? [];
   if (params.length >= 2) {
-    const addrParam = params.find(
-      (p) =>
-        p.type === "address" ||
-        /spender|operator|usr|guy|to/i.test(p.name),
-    ) ?? params[0];
+    const addrParam =
+      params.find(
+        (p) => p.type === "address" || /spender|operator|usr|guy|to/i.test(p.name),
+      ) ?? params[0];
     if (addrParam && typeof addrParam.value === "string" && isValidEvmAddress(addrParam.value)) {
       spenderAddress = addrParam.value.toLowerCase();
     }
 
-    const valParam = params.find(
-      (p) =>
-        p.type.startsWith("uint") ||
-        p.type === "bool" ||
-        /amount|value|wad|approved|addedvalue/i.test(p.name),
-    ) ?? params[1];
+    const valParam =
+      params.find(
+        (p) =>
+          p.type.startsWith("uint") ||
+          p.type === "bool" ||
+          /amount|value|wad|approved|addedvalue/i.test(p.name),
+      ) ?? params[1];
 
     if (valParam !== undefined) {
       if (valParam.type === "bool" || typeof valParam.value === "boolean") {
@@ -228,7 +223,6 @@ export function parseApprovalFromTx(
     }
   }
 
-  // 2. Fallback to raw hex calldata decoding (0x + 8-char selector + 64-char arg1 + 64-char arg2)
   if ((!spenderAddress || (amountBigInt === null && isSetApprovalBool === null)) && rawInput.length >= 138) {
     const word1 = rawInput.slice(10, 74);
     const word2 = rawInput.slice(74, 138);
@@ -275,7 +269,6 @@ export function parseApprovalFromTx(
   }
 
   if (amountBigInt === null) {
-    // Method matched approve, default to bounded unknown if calldata was truncated
     return {
       spenderAddress,
       rawAmount: "unknown",
@@ -309,12 +302,9 @@ export function parseApprovalFromTx(
     };
   }
 
-  // Format with 18 decimals estimate for readability
   const whole = amountBigInt / 10n ** 18n;
   const formattedAllowance =
-    whole > 0n
-      ?whole.toLocaleString("en-US")
-      : amountBigInt.toString();
+    whole > 0n ? whole.toLocaleString("en-US") : amountBigInt.toString();
 
   return {
     spenderAddress,
@@ -325,17 +315,12 @@ export function parseApprovalFromTx(
   };
 }
 
-/**
- * Scans transactions across chains to detect ERC-20/721/1155 approvals and tracks latest state
- * per (chainId, tokenAddress, spenderAddress) pair so revocations properly update status.
- */
 export function detectApprovals(
   walletAddress: string,
   transactions: WalletTransaction[],
   explorerMap: Record<string, string>,
 ): ApprovalFinding[] {
   const normalizedWallet = normalizeAddr(walletAddress);
-  // Sort oldest -> newest so latest state for (chainId, token, spender) wins
   const sorted = [...transactions].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
   );
@@ -347,8 +332,9 @@ export function detectApprovals(
       continue;
     }
 
+    const chainKey = String(tx.chainId);
     const explorerBase =
-      explorerMap[tx.chainId] ??
+      explorerMap[chainKey] ??
       tx.explorerTxUrl.replace(/\/tx\/[^/]+$/, "") ??
       "https://eth.blockscout.com";
 
@@ -356,7 +342,7 @@ export function detectApprovals(
     if (!parsed) continue;
 
     const tokenAddress = normalizeAddr(tx.to);
-    const key = `${tx.chainId}:${tokenAddress}:${parsed.spenderAddress}`;
+    const key = `${chainKey}:${tokenAddress}:${parsed.spenderAddress}`;
 
     const isUnlimited = parsed.allowanceType === "unlimited";
     const isRevoked = parsed.allowanceType === "revoked";
@@ -374,7 +360,7 @@ export function detectApprovals(
         : "Active bounded token allowance granted to spender contract.";
 
     latestByPair.set(key, {
-      id: `${tx.chainId}-${tx.hash}`,
+      id: `${chainKey}-${tx.hash}`,
       chainId: tx.chainId,
       chainName: tx.chainName,
       txHash: tx.hash,
@@ -402,10 +388,6 @@ export function detectApprovals(
   );
 }
 
-/**
- * Checks whether two EVM addresses exhibit vanity prefix/suffix similarity
- * used in address poisoning attacks.
- */
 export function computeAddressSimilarity(
   addrA: string,
   addrB: string,
@@ -437,7 +419,6 @@ export function computeAddressSimilarity(
     suffixMatchLen++;
   }
 
-  // Poisoners typically match >= 3 prefix + >= 3 suffix chars (total >= 7) or >= 5 prefix/suffix chars
   const isLookalike =
     (prefixMatchLen >= 3 && suffixMatchLen >= 3 && prefixMatchLen + suffixMatchLen >= 7) ||
     prefixMatchLen >= 6 ||
@@ -446,16 +427,6 @@ export function computeAddressSimilarity(
   return { isLookalike, prefixMatchLen, suffixMatchLen };
 }
 
-/**
- * Detects address poisoning and zero-value/dust spoofing attacks across wallet transactions.
- *
- * Heuristics:
- * 1. Builds the set of trusted/legitimate counterparties that the wallet has actively sent funds to
- *    or interacted with meaningfully.
- * 2. Flags any counterparty or incoming sender whose address is a vanity lookalike (matching prefix/suffix,
- *    differing middle bytes) of a legitimate counterparty or of the wallet itself.
- * 3. Flags unsolicited zero-value or dust transfers designed to pollute transaction history.
- */
 export function detectAddressPoisoning(
   walletAddress: string,
   transactions: WalletTransaction[],
@@ -465,7 +436,6 @@ export function detectAddressPoisoning(
   const signals: RiskSignal[] = [];
   const seenSignalKeys = new Set<string>();
 
-  // 1. Identify legitimate outbound counterparties (sorted chronologically)
   const chronological = [...transactions].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
   );
@@ -483,9 +453,7 @@ export function detectAddressPoisoning(
       valueBig = 0n;
     }
 
-    // Outbound non-zero transaction establishes a trusted counterparty first
     if (from === normalizedWallet && to !== normalizedWallet && valueBig > 0n) {
-      // Only mark as trusted if it doesn't already mimic an earlier trusted counterparty
       let mimicsExisting = false;
       for (const existing of trustedCounterparties) {
         if (computeAddressSimilarity(to, existing).isLookalike) {
@@ -499,14 +467,14 @@ export function detectAddressPoisoning(
     }
   }
 
-  // Also include the wallet's own address as a reference target for self-mimicry poisoning
   const referenceTargets = new Set<string>([normalizedWallet, ...trustedCounterparties]);
 
   for (const tx of chronological) {
     const from = normalizeAddr(tx.from);
     const to = normalizeAddr(tx.to);
+    const chainKey = String(tx.chainId);
     const explorerBase =
-      explorerMap[tx.chainId] ??
+      explorerMap[chainKey] ??
       tx.explorerTxUrl.replace(/\/tx\/[^/]+$/, "") ??
       "https://eth.blockscout.com";
 
@@ -521,7 +489,7 @@ export function detectAddressPoisoning(
       valueBig = 0n;
     }
 
-    const isZeroOrDust = valueBig === 0n || (valueBig > 0n && valueBig <= 1000000000000n); // <= 1e-6 ETH
+    const isZeroOrDust = valueBig === 0n || (valueBig > 0n && valueBig <= 1000000000000n);
     const isIncoming = to === normalizedWallet && from !== normalizedWallet;
 
     for (const candidate of candidateAddresses) {
@@ -529,7 +497,7 @@ export function detectAddressPoisoning(
         if (candidate === target) continue;
         const sim = computeAddressSimilarity(candidate, target);
         if (sim.isLookalike) {
-          const signalKey = `poison:${tx.chainId}:${candidate}:${target}`;
+          const signalKey = `poison:${chainKey}:${candidate}:${target}`;
           if (seenSignalKeys.has(signalKey)) continue;
           seenSignalKeys.add(signalKey);
 
@@ -537,17 +505,13 @@ export function detectAddressPoisoning(
             isIncoming && isZeroOrDust ? "critical" : "high";
 
           signals.push({
-            id: `risk-poison-${tx.chainId}-${tx.hash.slice(0, 10)}`,
+            id: `risk-poison-${chainKey}-${tx.hash.slice(0, 10)}`,
             type: "address_poisoning",
             severity,
             title: `Address Poisoning Lookalike Detected (${sim.prefixMatchLen} prefix / ${sim.suffixMatchLen} suffix hex match)`,
             description: `Address ${candidate.slice(0, 8)}…${candidate.slice(-6)} closely mimics ${
               target === normalizedWallet ? "your own wallet" : `known counterparty ${target.slice(0, 8)}…${target.slice(-6)}`
-            } (${sim.prefixMatchLen} leading and ${sim.suffixMatchLen} trailing hex characters match). ${
-              isIncoming && isZeroOrDust
-                ? "It sent a zero/dust transfer to pollute your transaction history."
-                : "Verify the full 42-character address before copying from history."
-            }`,
+            } (${sim.prefixMatchLen} leading and ${sim.suffixMatchLen} trailing hex characters match).`,
             chainId: tx.chainId,
             chainName: tx.chainName,
             txHash: tx.hash,
@@ -562,21 +526,20 @@ export function detectAddressPoisoning(
       }
     }
 
-    // Detect unsolicited incoming zero-value native/token transfer spoofing
     if (
       isIncoming &&
       valueBig === 0n &&
       (!tx.method || tx.method === "transfer" || tx.method === "0x")
     ) {
-      const spoofKey = `zero:${tx.chainId}:${from}`;
+      const spoofKey = `zero:${chainKey}:${from}`;
       if (!seenSignalKeys.has(spoofKey) && !trustedCounterparties.has(from)) {
         seenSignalKeys.add(spoofKey);
         signals.push({
-          id: `risk-zero-${tx.chainId}-${tx.hash.slice(0, 10)}`,
+          id: `risk-zero-${chainKey}-${tx.hash.slice(0, 10)}`,
           type: "zero_value_spoof",
           severity: "medium",
           title: "Unsolicited Zero-Value Transfer (History Spoofing Candidate)",
-          description: `Received a 0-value transaction from unknown sender ${from.slice(0, 8)}…${from.slice(-6)} on ${tx.chainName}. Attackers frequently use 0-value transfers to inject spoofed entries into wallet activity feeds.`,
+          description: `Received a 0-value transaction from unknown sender ${from.slice(0, 8)}…${from.slice(-6)} on ${tx.chainName}.`,
           chainId: tx.chainId,
           chainName: tx.chainName,
           txHash: tx.hash,
@@ -592,18 +555,14 @@ export function detectAddressPoisoning(
   return signals;
 }
 
-/**
- * Computes a deterministic Wallet Linkability Score (0-100) evaluating how easily
- * the wallet's multi-chain activity and identity can be correlated across networks.
- */
 export function calculateLinkabilityScore(
   walletAddress: string,
   chains: Array<{
-    chainId: string;
+    chainId: string | number;
     chainName: string;
     explorerUrl: string;
-    nativeBalance: string;
-    totalTransactions?: number;
+    nativeBalance: string | null;
+    totalTransactionsCount?: number;
     tokens: Array<{ address: string; symbol: string }>;
     transactions: WalletTransaction[];
   }>,
@@ -616,11 +575,10 @@ export function calculateLinkabilityScore(
     (c) =>
       c.transactions.length > 0 ||
       c.tokens.length > 0 ||
-      (c.totalTransactions ?? 0) > 0 ||
-      Number(c.nativeBalance) > 0,
+      (c.totalTransactionsCount ?? 0) > 0 ||
+      Number(c.nativeBalance ?? 0) > 0,
   );
 
-  // 1. Cross-chain counterparty reuse (up to 35 pts)
   const counterpartyChains = new Map<
     string,
     { chains: Set<string>; txCount: number; urls: Map<string, string> }
@@ -679,11 +637,8 @@ export function calculateLinkabilityScore(
     .sort((a, b) => b.chains.length - a.chains.length || b.txCount - a.txCount);
 
   const counterpartyScore = Math.min(35, sharedCounterparties.length * 10);
-
-  // 2. Multi-chain footprint density (up to 25 pts)
   const footprintScore = Math.min(25, activeChains.length * 4);
 
-  // 3. Temporal correlation & bridge usage (up to 20 pts)
   const hourBuckets = new Map<number, Set<string>>();
   for (const chain of chains) {
     for (const tx of chain.transactions) {
@@ -704,9 +659,7 @@ export function calculateLinkabilityScore(
     overlappingHours * 3 + bridgeInteractionCount * 4,
   );
 
-  // 4. Public Identity & ENS / Metadata exposure (up to 20 pts)
   const identityScore = ensName ? 20 : hasIdentityMetadata ? 12 : 0;
-
   const totalScore = Math.min(
     100,
     counterpartyScore + footprintScore + temporalAndBridgeScore + identityScore,
@@ -745,7 +698,7 @@ export function calculateLinkabilityScore(
       maxScore: 25,
       description: `Identical EVM address is active across ${activeChains.length} of ${chains.length} inspected networks.`,
       evidence: activeChains.slice(0, 5).map((c) => ({
-        label: `${c.chainName} (${c.totalTransactions ?? c.transactions.length} txs)`,
+        label: `${c.chainName} (${c.totalTransactionsCount ?? c.transactions.length} txs)`,
         address: walletAddress,
         chainName: c.chainName,
         explorerUrl: buildExplorerAddressUrl(c.explorerUrl, walletAddress),
@@ -774,10 +727,7 @@ export function calculateLinkabilityScore(
             {
               label: `ENS: ${ensName}`,
               address: walletAddress,
-              explorerUrl: buildExplorerAddressUrl(
-                "https://eth.blockscout.com",
-                walletAddress,
-              ),
+              explorerUrl: buildExplorerAddressUrl("https://eth.blockscout.com", walletAddress),
             },
           ]
         : [],
@@ -801,14 +751,10 @@ export function calculateLinkabilityScore(
   };
 }
 
-/**
- * Aggregates multi-chain transactions into a daily/bucketed historical performance
- * and activity series for charts.
- */
 export function buildHistoricalPerformance(
   walletAddress: string,
   chains: Array<{
-    chainId: string;
+    chainId: string | number;
     chainName: string;
     nativePriceUsd: number | null;
     transactions: WalletTransaction[];
