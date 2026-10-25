@@ -42,7 +42,7 @@ paths:
     get:
       operationId: getWalletOverview
       tags: [chainlens]
-      summary: Get balances and recent transactions across supported chains
+      summary: Get balances, lifetime counters, linkability score, historical charts, and recent transactions across 10+ supported chains
       parameters:
         - name: address
           in: path
@@ -112,6 +112,24 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ChainWallet"
+        totalLifetimeTransactions:
+          type: integer
+        totalLifetimeTokenTransfers:
+          type: integer
+        approvals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalFinding"
+        poisoningMatches:
+          type: array
+          items:
+            $ref: "#/components/schemas/PoisoningFinding"
+        linkability:
+          $ref: "#/components/schemas/LinkabilitySummary"
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistoricalPoint"
       required: [address, chains]
     ChainWallet:
       type: object
@@ -136,6 +154,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/WalletTransaction"
+        explorerUrl:
+          type: string
+        addressExplorerUrl:
+          type: string
+        totalTransactionsCount:
+          type: integer
+        totalTokenTransfersCount:
+          type: integer
       required:
         - chainId
         - chainName
@@ -192,6 +218,143 @@ components:
         status:
           type: string
       required: [hash, timestamp, from, to, value, method, status]
+    ApprovalFinding:
+      type: object
+      properties:
+        chainId:
+          type: integer
+        chainName:
+          type: string
+        hash:
+          type: string
+        timestamp:
+          type: string
+        tokenAddress:
+          type: string
+        spenderAddress:
+          type: string
+        allowanceType:
+          type: string
+          enum: [unlimited, bounded, revoked]
+        formattedAllowance:
+          type: string
+        method:
+          type: string
+        txExplorerUrl:
+          type: string
+        tokenExplorerUrl:
+          type: string
+        spenderExplorerUrl:
+          type: string
+      required:
+        - chainId
+        - chainName
+        - hash
+        - timestamp
+        - tokenAddress
+        - spenderAddress
+        - allowanceType
+        - formattedAllowance
+        - method
+        - txExplorerUrl
+        - tokenExplorerUrl
+        - spenderExplorerUrl
+    PoisoningFinding:
+      type: object
+      properties:
+        chainId:
+          type: integer
+        chainName:
+          type: string
+        hash:
+          type: string
+        timestamp:
+          type: string
+        suspiciousAddress:
+          type: string
+        mimickedAddress:
+          type: string
+        prefixMatch:
+          type: integer
+        suffixMatch:
+          type: integer
+        isZeroValue:
+          type: boolean
+        txExplorerUrl:
+          type: string
+        suspiciousExplorerUrl:
+          type: string
+        mimickedExplorerUrl:
+          type: string
+      required:
+        - chainId
+        - chainName
+        - hash
+        - timestamp
+        - suspiciousAddress
+        - mimickedAddress
+        - prefixMatch
+        - suffixMatch
+        - isZeroValue
+        - txExplorerUrl
+        - suspiciousExplorerUrl
+        - mimickedExplorerUrl
+    SharedCounterparty:
+      type: object
+      properties:
+        address:
+          type: string
+        chains:
+          type: array
+          items:
+            type: string
+        txCount:
+          type: integer
+        explorerUrl:
+          type: string
+      required: [address, chains, txCount, explorerUrl]
+    LinkabilitySummary:
+      type: object
+      properties:
+        score:
+          type: number
+        level:
+          type: string
+          enum: [Low, Moderate, High, Critical]
+        activeChainCount:
+          type: integer
+        sharedCounterpartyCount:
+          type: integer
+        temporalOverlapCount:
+          type: integer
+        hasPublicIdentity:
+          type: boolean
+        sharedCounterparties:
+          type: array
+          items:
+            $ref: "#/components/schemas/SharedCounterparty"
+      required:
+        - score
+        - level
+        - activeChainCount
+        - sharedCounterpartyCount
+        - temporalOverlapCount
+        - hasPublicIdentity
+        - sharedCounterparties
+    HistoricalPoint:
+      type: object
+      properties:
+        date:
+          type: string
+        txCount:
+          type: integer
+        volumeUsd:
+          type: number
+        cumulativeVolumeUsd:
+          type: number
+        activeChains:
+          type: integer
+      required: [date, txCount, volumeUsd, cumulativeVolumeUsd, activeChains]
     AddressMetadata:
       type: object
       properties:
@@ -212,4 +375,3 @@ components:
         hasMetadata:
           type: boolean
       required: [address, name, ensName, website, tags, iconUrl, hasMetadata]
-

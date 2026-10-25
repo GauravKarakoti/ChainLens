@@ -1,0 +1,41 @@
+name: ChainLens CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    name: Unit Tests, Typecheck & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run core forensics unit tests (Address Poisoning, Approvals & Linkability)
+        run: pnpm --filter @workspace/api-server exec tsx --test src/lib/__tests__/blockscout.test.ts
+
+      - name: Typecheck all workspace packages
+        run: pnpm run typecheck
+
+      - name: Build all workspace packages
+        run: pnpm run build
