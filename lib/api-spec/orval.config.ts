@@ -9,7 +9,6 @@ const apiZodSrc = path.resolve(root, "lib", "api-zod", "src");
 const titleTransformer: InputTransformerFn = (config) => {
   config.info ??= {};
   config.info.title = "Api";
-
   return config;
 };
 
@@ -57,9 +56,6 @@ export default defineConfig({
       prettier: true,
       override: {
         zod: {
-          // Orval resolves `auto` from lib/api-spec/package.json, which has no
-          // zod dependency, so orval >= 8.23 falls back to Zod 4 syntax while
-          // the catalog installs zod 3. Pin to match the catalog.
           version: 3,
           coerce: {
             query: ['boolean', 'number', 'string'],

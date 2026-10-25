@@ -65,7 +65,6 @@ import {
   Link2,
   LoaderCircle,
   Search,
-  ShieldAlert,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -165,7 +164,6 @@ function Dashboard() {
   const linkability = overview?.linkability;
   const history = overview?.history ?? [];
 
-  // Construct UI risk signals from poisoning matches & unlimited approvals
   const riskSignals = useMemo(() => {
     const list: Array<{
       id: string;
