@@ -59,10 +59,22 @@ paths:
                 $ref: "#/components/schemas/WalletOverview"
         "400":
           description: Invalid wallet address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Blockscout API key is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "502":
           description: Blockscout API request failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /addresses/{address}/metadata:
     get:
       operationId: getAddressMetadata
@@ -84,12 +96,31 @@ paths:
                 $ref: "#/components/schemas/AddressMetadata"
         "400":
           description: Invalid wallet address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Blockscout API key is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "502":
           description: Blockscout metadata request failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
+    ErrorResponse:
+      type: object
+      description: Error payload returned for failed requests
+      properties:
+        error:
+          type: string
+      required: [error]
     HealthStatus:
       type: object
       properties:

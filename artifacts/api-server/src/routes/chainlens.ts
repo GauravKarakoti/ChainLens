@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import {
+  type ErrorResponse,
   GetAddressMetadataParams,
   GetAddressMetadataResponse,
   GetBlockscoutStatusResponse,
@@ -13,6 +14,10 @@ import {
 } from "../lib/blockscout";
 
 const router: IRouter = Router();
+
+function errorBody(error: string): ErrorResponse {
+  return { error };
+}
 
 function safeErrorContext(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
@@ -41,7 +46,7 @@ router.get("/blockscout/status", (_req, res) => {
 router.get("/wallets/:address/overview", async (req, res): Promise<void> => {
   const params = GetWalletOverviewParams.safeParse(req.params);
   if (!params.success) {
-    res.status(400).json({ error: "Enter a valid 0x-prefixed EVM address." });
+    res.status(400).json(errorBody("Enter a valid 0x-prefixed EVM address."));
     return;
   }
 
@@ -64,16 +69,16 @@ router.get("/wallets/:address/overview", async (req, res): Promise<void> => {
       },
       "Blockscout wallet lookup failed",
     );
-    res.status(502).json({
-      error: `Blockscout request failed: ${safeErrorContext(error)}`,
-    });
+    res
+      .status(502)
+      .json(errorBody(`Blockscout request failed: ${safeErrorContext(error)}`));
   }
 });
 
 router.get("/addresses/:address/metadata", async (req, res): Promise<void> => {
   const params = GetAddressMetadataParams.safeParse(req.params);
   if (!params.success) {
-    res.status(400).json({ error: "Enter a valid 0x-prefixed EVM address." });
+    res.status(400).json(errorBody("Enter a valid 0x-prefixed EVM address."));
     return;
   }
 
@@ -88,9 +93,13 @@ router.get("/addresses/:address/metadata", async (req, res): Promise<void> => {
       },
       "Blockscout address metadata lookup failed",
     );
-    res.status(502).json({
-      error: `Blockscout metadata request failed: ${safeErrorContext(error)}`,
-    });
+    res
+      .status(502)
+      .json(
+        errorBody(
+          `Blockscout metadata request failed: ${safeErrorContext(error)}`,
+        ),
+      );
   }
 });
 
